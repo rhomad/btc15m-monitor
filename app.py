@@ -31,7 +31,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.0-railway"
+APP_VERSION = "2.1-railway-research"
 
 
 def load_json(path):
@@ -540,7 +540,235 @@ class Monitor:
             time.sleep(max(0.5,float(self.config.get("poll_seconds",1.0))))
 
 
+RESEARCH_ASSETS = {
+    "BTC":  {"symbol":"BTCUSDT",  "market":"spot",    "kalshi_series":"KXBTC15M"},
+    "ETH":  {"symbol":"ETHUSDT",  "market":"spot",    "kalshi_series":"KXETH15M"},
+    "SOL":  {"symbol":"SOLUSDT",  "market":"spot",    "kalshi_series":"KXSOL15M"},
+    "XRP":  {"symbol":"XRPUSDT",  "market":"spot",    "kalshi_series":"KXXRP15M"},
+    "DOGE": {"symbol":"DOGEUSDT", "market":"spot",    "kalshi_series":"KXDOGE15M"},
+    "BNB":  {"symbol":"BNBUSDT",  "market":"spot",    "kalshi_series":"KXBNB15M"},
+    "HYPE": {"symbol":"HYPEUSDT", "market":"futures", "kalshi_series":"KXHYPE15M"},
+}
+RESEARCH_THRESHOLDS = [5,10,15,20,25,30,35,40,50,60,80,100]
+RESEARCH_PATH = DATA_DIR / "v3_multiasset_research.json"
+RESEARCH_PARTIAL_PATH = DATA_DIR / "v3_multiasset_research.partial.json"
+RESEARCH_VERSION = "2026-08-29-v1"
+
+
+def wilson_low(wins, n, z=1.959963984540054):
+    if not n:
+        return None
+    p=wins/n
+    den=1+z*z/n
+    center=(p+z*z/(2*n))/den
+    half=z*math.sqrt((p*(1-p)+z*z/(4*n))/n)/den
+    return max(0.0, center-half)*100
+
+
+def pct(wins, n):
+    return (wins/n*100.0) if n else None
+
+
+class ResearchEngine:
+    """Background, read-only validation of the BTC pullback family on other crypto assets.
+
+    Methodology intentionally freezes the BTC structure: first qualifying pullback per 15m candle,
+    M7-M10, and predeclared bp thresholds. This avoids optimizing a separate magic minute per asset.
+    """
+    def __init__(self, monitor):
+        self.monitor=monitor
+        self.lock=threading.Lock()
+        self.running=False
+        self.done=RESEARCH_PATH.exists()
+        self.error=""
+        self.asset=""
+        self.progress_pct=100.0 if self.done else 0.0
+        self.started_at=""
+        self.finished_at=""
+        self.message="Existing research result found." if self.done else "Not started"
+        self.result=None
+        if self.done:
+            try:self.result=load_json(RESEARCH_PATH)
+            except Exception:self.done=False
+
+    def public_status(self):
+        with self.lock:
+            return {
+                "running":self.running,"done":self.done,"error":self.error,"asset":self.asset,
+                "progress_pct":round(self.progress_pct,1),"started_at":self.started_at,
+                "finished_at":self.finished_at,"message":self.message,
+                "result_present":RESEARCH_PATH.exists(),"version":RESEARCH_VERSION
+            }
+
+    def start(self, force=False):
+        with self.lock:
+            if self.running:return False,"Research already running"
+            if RESEARCH_PATH.exists() and not force:
+                self.done=True
+                return False,"Research already completed. Use force=1 to rerun."
+            self.running=True;self.done=False;self.error="";self.progress_pct=0.0
+            self.started_at=datetime.now(timezone.utc).isoformat();self.finished_at="";self.message="Starting"
+        threading.Thread(target=self._run,daemon=True).start()
+        return True,"Research started"
+
+    def _fetch_url(self, spec, start_ms, end_ms):
+        if spec["market"]=="spot":
+            return BINANCE_BASE + "/api/v3/klines?" + urlencode({
+                "symbol":spec["symbol"],"interval":"1m","limit":1000,"startTime":start_ms,"endTime":end_ms
+            })
+        return "https://fapi.binance.com/fapi/v1/klines?" + urlencode({
+            "symbol":spec["symbol"],"interval":"1m","limit":1000,"startTime":start_ms,"endTime":end_ms
+        })
+
+    def _empty_stats(self):
+        return {str(t):{"n":0,"wins":0,"monthly":{},"side":{"UP":[0,0],"DOWN":[0,0]},"minute":{str(m):[0,0] for m in (7,8,9,10)}} for t in RESEARCH_THRESHOLDS}
+
+    def _process_candle(self, rows, stats, coverage):
+        if len(rows)!=15:return
+        ots=[r[0] for r in rows]
+        if any(ots[i+1]-ots[i]!=60000 for i in range(14)):
+            coverage["incomplete_candles"]+=1;return
+        op=rows[0][1];final=rows[-1][2]
+        if not op:return
+        coverage["candles_processed"]+=1
+        month=datetime.fromtimestamp(rows[0][0]/1000,tz=timezone.utc).strftime("%Y-%m")
+        # Exact BTC methodology: for each threshold, count only first qualifying state in M7-M10.
+        for t in RESEARCH_THRESHOLDS:
+            for m in (7,8,9,10):
+                last=rows[m-1][2];prev=rows[m-2][2]
+                side="UP" if last>op else ("DOWN" if last<op else "")
+                if not side or not prev:continue
+                step=(last/prev-1.0)*10000.0
+                pullback=(side=="UP" and step<0) or (side=="DOWN" and step>0)
+                dist=abs((last/op-1.0)*10000.0)
+                if pullback and dist>=t:
+                    win=(final>op) if side=="UP" else (final<op)
+                    s=stats[str(t)];s["n"]+=1;s["wins"]+=int(win)
+                    mo=s["monthly"].setdefault(month,[0,0]);mo[0]+=1;mo[1]+=int(win)
+                    sd=s["side"][side];sd[0]+=1;sd[1]+=int(win)
+                    mi=s["minute"][str(m)];mi[0]+=1;mi[1]+=int(win)
+                    break
+
+    def _research_asset(self, asset, spec, start_ms, end_ms, asset_index, total_assets):
+        stats=self._empty_stats()
+        coverage={"minutes_fetched":0,"candles_processed":0,"incomplete_candles":0,"first_open_ms":None,"last_open_ms":None,"api_calls":0}
+        next_ms=start_ms;group_id=None;group=[];last_ot=None
+        total_span=max(1,end_ms-start_ms)
+        while next_ms<=end_ms:
+            url=self._fetch_url(spec,next_ms,end_ms)
+            data=http_json(url,timeout=12)
+            coverage["api_calls"]+=1
+            if not data:break
+            advanced=False
+            for k in data:
+                try:ot=int(k[0]);op=float(k[1]);cl=float(k[4])
+                except Exception:continue
+                if ot<start_ms or ot>end_ms:continue
+                if last_ot is not None and ot<=last_ot:continue
+                last_ot=ot;advanced=True;coverage["minutes_fetched"]+=1
+                if coverage["first_open_ms"] is None:coverage["first_open_ms"]=ot
+                coverage["last_open_ms"]=ot
+                gid=ot//900000
+                if group_id is None:group_id=gid
+                if gid!=group_id:
+                    self._process_candle(group,stats,coverage)
+                    group=[];group_id=gid
+                group.append((ot,op,cl))
+            if not advanced:break
+            next_ms=last_ot+60000
+            with self.lock:
+                frac=min(1.0,max(0.0,(last_ot-start_ms)/total_span))
+                self.progress_pct=((asset_index+frac)/total_assets)*100.0
+                self.message=f"{asset}: {coverage['minutes_fetched']:,} minutes"
+            if len(data)<1000:break
+            time.sleep(float(os.getenv("ALT_RESEARCH_SLEEP","0.12")))
+        if group:self._process_candle(group,stats,coverage)
+        return self._finalize_asset(asset,spec,stats,coverage)
+
+    def _finalize_asset(self, asset, spec, stats, coverage):
+        rows=[]
+        for t in RESEARCH_THRESHOLDS:
+            s=stats[str(t)];n=s["n"];wins=s["wins"]
+            monthly={m:{"n":v[0],"wins":v[1],"win_pct":pct(v[1],v[0])} for m,v in sorted(s["monthly"].items())}
+            monthly_valid=[v["win_pct"] for v in monthly.values() if v["n"]>=25 and v["win_pct"] is not None]
+            worst=min(monthly_valid) if monthly_valid else None
+            aug=monthly.get("2026-08",{"n":0,"wins":0,"win_pct":None})
+            val_months=[monthly.get("2026-06"),monthly.get("2026-07")]
+            vn=sum(x["n"] for x in val_months if x);vw=sum(x["wins"] for x in val_months if x)
+            val_pct=pct(vw,vn)
+            wl=wilson_low(wins,n)
+            cons_candidates=[x for x in (wl,worst,aug.get("win_pct") if aug.get("n",0)>=50 else None,val_pct if vn>=100 else None) if x is not None]
+            cons=min(cons_candidates) if cons_candidates else None
+            sides={k:{"n":v[0],"wins":v[1],"win_pct":pct(v[1],v[0])} for k,v in s["side"].items()}
+            mins={k:{"n":v[0],"wins":v[1],"win_pct":pct(v[1],v[0])} for k,v in s["minute"].items()}
+            rows.append({"min_bp":t,"n":n,"wins":wins,"win_pct":pct(wins,n),"wilson_low_pct":wl,
+                         "worst_month_pct":worst,"validation_jun_jul_n":vn,"validation_jun_jul_pct":val_pct,
+                         "holdout_aug_n":aug.get("n",0),"holdout_aug_pct":aug.get("win_pct"),
+                         "conservative_pct":cons,"monthly":monthly,"side":sides,"first_signal_minute":mins})
+        candidates=[]
+        for r in rows:
+            if (r["n"]>=500 and r["holdout_aug_n"]>=100 and r["wilson_low_pct"] is not None and r["wilson_low_pct"]>=88
+                and r["holdout_aug_pct"] is not None and r["holdout_aug_pct"]>=88
+                and r["worst_month_pct"] is not None and r["worst_month_pct"]>=85):
+                candidates.append(r)
+        selected=candidates[0] if candidates else None
+        status="PASS" if selected else "SHADOW"
+        if spec["market"]=="futures":
+            status="SHADOW_FUTURES_PROXY" if selected else "SHADOW_FUTURES_PROXY"
+        first_iso=datetime.fromtimestamp(coverage["first_open_ms"]/1000,tz=timezone.utc).isoformat() if coverage["first_open_ms"] else None
+        last_iso=datetime.fromtimestamp(coverage["last_open_ms"]/1000,tz=timezone.utc).isoformat() if coverage["last_open_ms"] else None
+        # If less than ~60 days are available, never promote automatically.
+        days=((coverage["last_open_ms"]-coverage["first_open_ms"])/86400000.0) if coverage["first_open_ms"] and coverage["last_open_ms"] else 0
+        if days<60:status="INSUFFICIENT_HISTORY";selected=None
+        return {"asset":asset,"symbol":spec["symbol"],"market_source":spec["market"],"kalshi_series":spec["kalshi_series"],
+                "status":status,"recommended_threshold":selected,"coverage":{**coverage,"first_open":first_iso,"last_open":last_iso,"days":days},
+                "thresholds":rows}
+
+    def _run(self):
+        try:
+            start=datetime(2026,3,1,tzinfo=timezone.utc);end=datetime(2026,8,29,tzinfo=timezone.utc)
+            start_ms=int(start.timestamp()*1000);end_ms=int(end.timestamp()*1000)-1
+            result={"research_version":RESEARCH_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),
+                    "method":"First qualifying pullback per 15m candle; M7-M10 fixed; direction defined by completed 1m close vs 15m open.",
+                    "training_and_validation":"Underlying data Mar 1-Aug 28 2026 UTC. August is treated as a final holdout when coverage is sufficient.",
+                    "warning":"Underlying-pattern validation only. Kalshi execution edge must be forward-tested using actual asks/spreads and settlement-basis checks.",
+                    "assets":{}}
+            if RESEARCH_PARTIAL_PATH.exists():
+                try:
+                    old=load_json(RESEARCH_PARTIAL_PATH)
+                    if old.get("research_version")==RESEARCH_VERSION and isinstance(old.get("assets"),dict):result["assets"].update(old["assets"])
+                except Exception:pass
+            items=list(RESEARCH_ASSETS.items())
+            for i,(asset,spec) in enumerate(items):
+                if asset in result["assets"] and result["assets"][asset].get("status") not in ("ERROR",):
+                    with self.lock:self.progress_pct=((i+1)/len(items))*100.0;self.message=f"{asset}: cached"
+                    continue
+                with self.lock:self.asset=asset;self.message=f"Starting {asset}"
+                try:res=self._research_asset(asset,spec,start_ms,end_ms,i,len(items))
+                except Exception as e:
+                    res={"asset":asset,"symbol":spec["symbol"],"market_source":spec["market"],"kalshi_series":spec["kalshi_series"],"status":"ERROR","error":str(e)}
+                result["assets"][asset]=res
+                save_json(RESEARCH_PARTIAL_PATH,result)
+            save_json(RESEARCH_PATH,result)
+            try:RESEARCH_PARTIAL_PATH.unlink(missing_ok=True)
+            except Exception:pass
+            self.result=result
+            lines=["Multiasset 15m research finished"]
+            for a,res in result["assets"].items():
+                sel=res.get("recommended_threshold")
+                if sel:
+                    lines.append(f"{a}: PASS >= {sel['min_bp']}bp | holdout {sel['holdout_aug_pct']:.1f}% (n={sel['holdout_aug_n']})")
+                else:
+                    lines.append(f"{a}: {res.get('status','SHADOW')}")
+            post_telegram(telegram_token(),telegram_chat_id(self.monitor.config),"\n".join(lines)[:3900])
+            with self.lock:
+                self.running=False;self.done=True;self.progress_pct=100.0;self.asset="";self.finished_at=datetime.now(timezone.utc).isoformat();self.message="Completed"
+        except Exception as e:
+            with self.lock:
+                self.running=False;self.done=False;self.error=str(e);self.finished_at=datetime.now(timezone.utc).isoformat();self.message="Failed"
+
 MONITOR=None
+RESEARCH=None
 
 
 def check_basic_auth(header):
@@ -596,6 +824,11 @@ class Handler(BaseHTTPRequestHandler):
             else:self._send(404,b"","text/plain")
         elif path=="/api/telegram/status":
             self._send(200,json.dumps({"token_present":bool(telegram_token()),"chat_id_present":bool(telegram_chat_id(MONITOR.config)),"configured":bool(telegram_token() and telegram_chat_id(MONITOR.config))}))
+        elif path=="/api/research/status":
+            self._send(200,json.dumps(RESEARCH.public_status()))
+        elif path=="/api/research/file":
+            if RESEARCH_PATH.exists():self._send(200,RESEARCH_PATH.read_bytes(),"application/json; charset=utf-8",{"Content-Disposition":"attachment; filename=v3_multiasset_research.json"})
+            else:self._send(404,json.dumps({"error":"research result not ready"}))
         else:self._send(404,json.dumps({"error":"not found"}))
 
     def do_POST(self):
@@ -613,13 +846,16 @@ class Handler(BaseHTTPRequestHandler):
             if path=="/api/telegram/test":
                 ok,msg=post_telegram(telegram_token(),telegram_chat_id(MONITOR.config),"BTC15M Monitor ✅\nTelegram conectado correctamente.")
                 self._send(200 if ok else 400,json.dumps({"ok":ok,"message":msg}));return
+            if path=="/api/research/start":
+                ok,msg=RESEARCH.start(force=False)
+                self._send(200,json.dumps({"ok":ok,"message":msg,"status":RESEARCH.public_status()}));return
             self._send(404,json.dumps({"error":"not found"}))
         except Exception as e:
             self._send(400,json.dumps({"ok":False,"error":str(e)}))
 
 
 def main():
-    global MONITOR
+    global MONITOR,RESEARCH
     demo="--demo" in sys.argv or os.getenv("DEMO_MODE","").lower() in ("1","true","yes")
     port=int(os.getenv("PORT","8765"))
     host=os.getenv("HOST","0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
@@ -628,6 +864,9 @@ def main():
         if a.startswith("--host="):host=a.split("=",1)[1]
     MONITOR=Monitor(demo=demo)
     threading.Thread(target=MONITOR.run,daemon=True).start()
+    RESEARCH=ResearchEngine(MONITOR)
+    if os.getenv("ALT_RESEARCH_AUTO","1").lower() in ("1","true","yes") and not RESEARCH.done:
+        RESEARCH.start(force=False)
     server=ThreadingHTTPServer((host,port),Handler)
     local_url=f"http://127.0.0.1:{port}"
     print(f"BTC 15M Monitor {APP_VERSION} | {'DEMO' if demo else 'LIVE'} | {host}:{port} | data={DATA_DIR}",flush=True)
