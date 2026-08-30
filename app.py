@@ -96,7 +96,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.4.1-railway-execution-lab-hotfix"
+APP_VERSION = "2.4.2-railway-rollover-aware-watchdog"
 
 
 def load_json(path):
@@ -946,7 +946,7 @@ class AltShadowMonitor:
         if self.startup_sent:
             return
         self.startup_sent=True
-        lines=["Multiasset EXECUTION LAB v2.4.1 ✅",
+        lines=["Multiasset EXECUTION LAB v2.4.2 ✅",
                "ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
                "Fees + orderbook depth + benchmark audit + portfolio shadow + promotion gates.",
                "BTC sigue igual. HYPE excluido. Sin órdenes automáticas."]
@@ -1347,24 +1347,38 @@ class DailyShadowReporter:
 
 class HealthWatchdog:
     def __init__(self,primary,alt):
-        self.primary=primary;self.alt=alt;self.stop_event=threading.Event();self.bad=False;self.last_alert=0;self.api_error_streak=0
+        self.primary=primary;self.alt=alt;self.stop_event=threading.Event();self.bad=False;self.last_alert=0;self.api_error_since=None
     def run(self):
         while not self.stop_event.is_set():
             try:
-                stale=float(os.getenv("WATCHDOG_STALE_SECONDS","45"));p=time.time()-self.primary.last_loop_at;a=time.time()-self.alt.last_loop_at
+                now_ts=time.time()
+                stale=float(os.getenv("WATCHDOG_STALE_SECONDS","60"))
+                api_hold=float(os.getenv("WATCHDOG_API_HOLD_SECONDS","90"))
+                rollover_grace=float(os.getenv("WATCHDOG_ROLLOVER_GRACE_SECONDS","75"))
+                p=now_ts-self.primary.last_loop_at;a=now_ts-self.alt.last_loop_at
                 ps=self.primary.get_state();alts=self.alt.get_states()
                 bad_assets=[name for name,s in alts.items() if s.get("status")=="API ERROR" or bool(s.get("api_error"))]
                 primary_api=(ps.get("status")=="API ERROR" or bool(ps.get("api_error")))
-                if primary_api or bad_assets:self.api_error_streak+=1
-                else:self.api_error_streak=0
-                sustained_api=self.api_error_streak>=3
+                any_api=bool(primary_api or bad_assets)
+                if any_api:
+                    if self.api_error_since is None:self.api_error_since=now_ts
+                else:
+                    self.api_error_since=None
+                api_age=(now_ts-self.api_error_since) if self.api_error_since is not None else 0.0
+                # Exchanges/market discovery can briefly roll between 15m contracts exactly at :00/:15/:30/:45.
+                # If both loops are alive, suppress transient API warnings during the opening grace period.
+                sec_into_window=int(now_ts)%900
+                in_rollover_grace=(sec_into_window < rollover_grace and p<=stale and a<=stale)
+                sustained_api=bool(any_api and api_age>=api_hold and not in_rollover_grace)
                 is_bad=(p>stale or a>stale or sustained_api)
-                if is_bad and (not self.bad or time.time()-self.last_alert>3600):
-                    self.bad=True;self.last_alert=time.time()
+                if is_bad and (not self.bad or now_ts-self.last_alert>3600):
+                    self.bad=True;self.last_alert=now_ts
                     parts=[]
                     if p>stale or a>stale:parts.append(f"loop stale BTC {p:.0f}s / multi {a:.0f}s")
-                    if sustained_api:parts.append("API errors: "+(", ".join((["BTC"] if primary_api else [])+bad_assets) or "unknown"))
-                    post_telegram(telegram_token(),telegram_chat_id(self.primary.config),"BTC15M WATCHDOG ⚠️\n"+" · ".join(parts)+"\nNo orders are being placed; inspect only if this persists.")
+                    if sustained_api:
+                        names=(["BTC"] if primary_api else [])+bad_assets
+                        parts.append("API errors >"+str(int(api_hold))+"s: "+(", ".join(names) or "unknown"))
+                    post_telegram(telegram_token(),telegram_chat_id(self.primary.config),"BTC15M WATCHDOG ⚠️\n"+" · ".join(parts)+"\nPersistent condition; inspect if it continues.")
                 elif not is_bad and self.bad:
                     self.bad=False;post_telegram(telegram_token(),telegram_chat_id(self.primary.config),"BTC15M WATCHDOG ✅\nData/API loops recovered.")
             except Exception as e:print("watchdog:",e,flush=True)
