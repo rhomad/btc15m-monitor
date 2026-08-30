@@ -22,7 +22,7 @@ DEFAULTS_DATA = {'min_distance_bp': 10, 'edge_min_points': 10.0, 'fee_buffer_cen
 DASHBOARD_HTML = '<!doctype html>\n<html lang="es">\n<head>\n<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n<title>BTC 15M Monitor</title>\n<style>\n:root{--bg:#07090d;--card:#11151d;--card2:#171c25;--text:#f7f7f7;--muted:#98a2b3;--line:#283141;--good:#46d369;--warn:#ffbe44;--bad:#ff625d;--blue:#5ba7ff}\n*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Arial,sans-serif}.wrap{max-width:1180px;margin:0 auto;padding:22px}.top{display:flex;justify-content:space-between;align-items:end;gap:18px;margin-bottom:18px}.title{font-size:30px;font-weight:800}.sub{color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);border-radius:999px;padding:8px 12px;color:var(--muted);font-size:12px}.status{padding:22px;border-radius:18px;background:var(--card);border:1px solid var(--line);margin-bottom:16px}.status.big-entry{border-color:var(--good);box-shadow:0 0 0 1px var(--good) inset}.status.big-forming{border-color:var(--warn)}.status-name{font-size:36px;font-weight:900;letter-spacing:-1px}.status-detail{color:var(--muted);margin-top:5px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;min-height:112px}.label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.value{font-size:27px;font-weight:800;margin-top:7px}.small{font-size:13px;color:var(--muted);margin-top:4px}.up{color:var(--good)}.down{color:#ff6b45}.warn{color:var(--warn)}.section{font-size:18px;font-weight:800;margin:24px 0 10px}.settings{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.field{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.field input,.field select{width:100%;background:#0b0e13;color:white;border:1px solid var(--line);border-radius:8px;padding:9px;font-size:15px}.button{margin-top:10px;background:var(--blue);color:#06101c;border:0;border-radius:10px;font-weight:800;padding:10px 16px;cursor:pointer}.footer{color:var(--muted);font-size:12px;margin:24px 0 40px;line-height:1.5}.bar{height:8px;background:#202734;border-radius:99px;overflow:hidden;margin-top:10px}.bar>div{height:100%;background:var(--good);width:0%}.error{color:var(--bad);font-size:12px;margin-top:10px;white-space:pre-wrap}.a-plus{color:#b5ff77}.a{color:#6dff91}.b{color:#ffd76d}.c{color:#c1cad7}\n@media(max-width:800px){.grid,.settings{grid-template-columns:repeat(2,1fr)}.title{font-size:24px}.status-name{font-size:30px}}\n@media(max-width:500px){.wrap{padding:14px}.grid,.settings{grid-template-columns:1fr 1fr}.value{font-size:22px}.card{min-height:100px;padding:13px}.top{align-items:start;flex-direction:column}.status-name{font-size:28px}}\n</style>\n</head>\n<body><div class="wrap">\n<div class="top"><div><div class="title">BTC 15M · Pullback Monitor Cloud</div><div class="sub">M7–M10 · fair/edge/Kelly · Railway 24/7 + Telegram</div></div><div class="pill" id="updated">Conectando…</div></div>\n<div class="status" id="statusBox"><div class="status-name" id="status">STARTING</div><div class="status-detail" id="statusDetail">Esperando datos…</div><div class="error" id="error"></div></div>\n\n<div class="grid">\n <div class="card"><div class="label">BTC live</div><div class="value" id="btc">—</div><div class="small">Open modelo: <span id="modelOpen">—</span></div></div>\n <div class="card"><div class="label">Vela</div><div class="value" id="minute">—</div><div class="small"><span id="left">—</span> restantes</div></div>\n <div class="card"><div class="label">Dirección / distancia</div><div class="value" id="side">—</div><div class="small"><span id="dist">—</span> bp · calidad <b id="quality">—</b></div></div>\n <div class="card"><div class="label">Último minuto</div><div class="value" id="action">—</div><div class="small">Paso: <span id="step">—</span> bp</div></div>\n</div>\n\n<div class="section">Fair value</div>\n<div class="grid">\n <div class="card"><div class="label">Fair central</div><div class="value" id="fair">—</div><div class="small">Histórico del tier</div></div>\n <div class="card"><div class="label">Fair conservador</div><div class="value" id="consFair">—</div><div class="small">Peor entre Wilson 95% y peor mes</div></div>\n <div class="card"><div class="label">Muestra</div><div class="value" id="sample">—</div><div class="small">Estados históricos</div></div>\n <div class="card"><div class="label">A+ extra</div><div class="value" id="neverCross">—</div><div class="small">Nunca cruzó el open por cierre 1m</div></div>\n</div>\n\n<div class="section">Kalshi</div>\n<div class="grid">\n <div class="card"><div class="label">Target / basis</div><div class="value" id="target">—</div><div class="small">Gap vs open Binance: <span id="basis">—</span> bp</div></div>\n <div class="card"><div class="label">UP ask</div><div class="value up" id="yesAsk">—</div><div class="small">bid <span id="yesBid">—</span></div></div>\n <div class="card"><div class="label">DOWN ask</div><div class="value down" id="noAsk">—</div><div class="small">bid <span id="noBid">—</span></div></div>\n <div class="card"><div class="label">Contrato elegido</div><div class="value" id="selected">—</div><div class="small">Ticker: <span id="ticker">—</span></div></div>\n</div>\n\n<div class="section">Entrada y tamaño</div>\n<div class="grid">\n <div class="card"><div class="label">Ask actual</div><div class="value" id="ask">—</div><div class="small">lado del modelo</div></div>\n <div class="card"><div class="label">Máximo a pagar</div><div class="value" id="maxBuy">—</div><div class="small">fair cons − edge mínimo − fee buffer</div></div>\n <div class="card"><div class="label">Edge conservador</div><div class="value" id="edge">—</div><div class="bar"><div id="edgeBar"></div></div></div>\n <div class="card"><div class="label">Riesgo sugerido</div><div class="value" id="risk">—</div><div class="small"><span id="kelly">—</span> Kelly fraccional · <span id="contracts">—</span> contratos aprox.</div></div>\n</div>\n\n<div class="section">Ajustes</div>\n<div class="settings">\n <div class="field"><label>Distancia mínima (bp)</label><select id="minbp"><option>10</option><option>15</option><option>20</option><option>25</option></select></div>\n <div class="field"><label>Edge mínimo (puntos)</label><input id="edgeMin" type="number" step="0.5"></div>\n <div class="field"><label>Fee buffer (¢)</label><input id="fee" type="number" step="0.1"></div>\n <div class="field"><label>Bankroll ($)</label><input id="bankroll" type="number" step="50"></div>\n <div class="field"><label>Kelly fraction (0.125 = 1/8)</label><input id="kf" type="number" step="0.025"></div>\n <div class="field"><label>Hard cap riesgo (%)</label><input id="cap" type="number" step="0.25"></div>\n <div class="field"><label>Máx gap Kalshi/Binance (bp)</label><input id="basisMax" type="number" step="1"></div>\n <div class="field"><label>Journal</label><button class="button" onclick="location.href=\'/api/journal\'">Descargar CSV</button></div>\n</div>\n<button class="button" onclick="saveSettings()">Guardar ajustes</button>\n\n<div class="section">Telegram / servidor</div>\n<div class="grid">\n <div class="card"><div class="label">Telegram</div><div class="value" id="tgStatus">—</div><div class="small" id="tgDetail">Configura TELEGRAM_BOT_TOKEN en Railway.</div></div>\n <div class="card"><div class="label">Conectar chat</div><button class="button" onclick="discoverTelegram()">Detectar chat</button><div class="small">Primero manda /start a tu bot.</div></div>\n <div class="card"><div class="label">Prueba</div><button class="button" onclick="testTelegram()">Enviar prueba</button><div class="small" id="tgMessage">—</div></div>\n <div class="card"><div class="label">Cloud</div><div class="value" id="cloudVersion">—</div><div class="small">Journal persistente si Railway Volume está montado.</div></div>\n</div>\n\n<div class="footer">Esta v1 es un scanner read-only: no coloca órdenes. “FORMING” es intraminuto y sirve como aviso temprano; la evidencia histórica se asigna a “CONFIRMED”, después del cierre del minuto. El modelo usa BTCUSDT Binance Spot y el contrato de Kalshi puede liquidar con otro benchmark. Si el target se puede extraer, el dashboard muestra el gap entre ambos anchors.</div>\n</div>\n<script>\nlet initialized=false,lastStatus=\'\';\nconst $=id=>document.getElementById(id);\nconst money=x=>x==null?\'—\':\'$\'+Number(x).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});\nconst num=(x,d=1)=>x==null?\'—\':Number(x).toFixed(d);\nconst cents=x=>x==null?\'—\':Number(x).toFixed(1)+\'¢\';\nfunction beep(){try{let a=new (window.AudioContext||window.webkitAudioContext)();let o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=740;g.gain.value=.06;o.start();o.stop(a.currentTime+.18)}catch(e){}}\nfunction fmtTime(sec){if(sec==null)return\'—\';let m=Math.floor(sec/60),s=sec%60;return m+\':\'+String(s).padStart(2,\'0\')}\nasync function refresh(){\n try{\n  const r=await fetch(\'/api/state\',{cache:\'no-store\'}),j=await r.json(),s=j.state,c=j.settings;\n  $(\'updated\').textContent=(s.mode===\'demo\'?\'DEMO · \':\'\')+\'actualizado \'+new Date(s.updated_at).toLocaleTimeString();\n  $(\'status\').textContent=s.status;$(\'statusDetail\').textContent=s.status_detail;$(\'error\').textContent=s.api_error||\'\';\n  $(\'statusBox\').className=\'status \'+(s.status===\'ENTRY ZONE\'?\'big-entry\':s.status===\'FORMING\'?\'big-forming\':\'\');\n  if(s.status!==lastStatus && [\'FORMING\',\'CONFIRMED\',\'ENTRY ZONE\'].includes(s.status))beep();lastStatus=s.status;\n  $(\'btc\').textContent=money(s.btc_price);$(\'modelOpen\').textContent=money(s.model_open);\n  $(\'minute\').textContent=\'M\'+(s.current_minute??\'—\');$(\'left\').textContent=fmtTime(s.seconds_left);\n  $(\'side\').textContent=s.side;$(\'side\').className=\'value \'+(s.side===\'UP\'?\'up\':s.side===\'DOWN\'?\'down\':\'\');\n  $(\'dist\').textContent=num(s.distance_bp,1);$(\'quality\').textContent=s.quality;$(\'quality\').className=s.quality===\'A+\'?\'a-plus\':s.quality===\'A\'?\'a\':s.quality===\'B\'?\'b\':\'c\';\n  $(\'action\').textContent=s.pullback_confirmed?\'PULLBACK ✓\':s.pullback_forming?\'FORMING…\':\'—\';$(\'step\').textContent=num(s.last_step_bp,1);\n  $(\'fair\').textContent=s.fair_pct==null?\'—\':num(s.fair_pct,1)+\'%\';$(\'consFair\').textContent=s.conservative_fair_pct==null?\'—\':num(s.conservative_fair_pct,1)+\'%\';$(\'sample\').textContent=s.sample_n??\'—\';$(\'neverCross\').textContent=s.never_crossed_open?\'YES · A+\':\'No / n.a.\';\n  $(\'target\').textContent=money(s.kalshi_target);$(\'basis\').textContent=num(s.target_gap_bp,1);$(\'yesAsk\').textContent=cents(s.yes_ask_cents);$(\'yesBid\').textContent=cents(s.yes_bid_cents);$(\'noAsk\').textContent=cents(s.no_ask_cents);$(\'noBid\').textContent=cents(s.no_bid_cents);$(\'selected\').textContent=s.selected_contract;$(\'ticker\').textContent=s.market_ticker||\'—\';\n  $(\'ask\').textContent=cents(s.selected_ask_cents);$(\'maxBuy\').textContent=cents(s.max_buy_cents);$(\'edge\').textContent=s.edge_points==null?\'—\':num(s.edge_points,1)+\' pt\';$(\'edgeBar\').style.width=Math.max(0,Math.min(100,(s.edge_points||0)*4))+\'%\';\n  $(\'risk\').textContent=s.risk_dollars==null?\'—\':money(s.risk_dollars);$(\'kelly\').textContent=s.fractional_kelly_pct==null?\'—\':num(s.fractional_kelly_pct,2)+\'%\';$(\'contracts\').textContent=s.contracts_suggested==null?\'—\':s.contracts_suggested;\n  $(\'tgStatus\').textContent=c.telegram_configured?\'READY\':\'OFF\';$(\'tgStatus\').className=\'value \'+(c.telegram_configured?\'up\':\'warn\');$(\'tgDetail\').textContent=c.telegram_configured?\'Bot + chat configurados\':(c.telegram_token_present?\'Token OK; falta detectar chat\':\'Falta TELEGRAM_BOT_TOKEN\');$(\'cloudVersion\').textContent=c.app_version||\'v2\';\n  if(!initialized){$(\'minbp\').value=c.min_distance_bp;$(\'edgeMin\').value=c.edge_min_points;$(\'fee\').value=c.fee_buffer_cents;$(\'bankroll\').value=c.bankroll_dollars;$(\'kf\').value=c.kelly_fraction;$(\'cap\').value=c.risk_cap_pct;$(\'basisMax\').value=c.max_basis_gap_bp;initialized=true}\n }catch(e){$(\'error\').textContent=\'Dashboard: \'+e}\n}\nasync function discoverTelegram(){let r=await fetch(\'/api/telegram/discover\',{method:\'POST\'}),j=await r.json();$(\'tgMessage\').textContent=j.ok?(j.message+\' · \'+j.chat_id):(j.error||\'Error\');initialized=false;refresh()}\nasync function testTelegram(){let r=await fetch(\'/api/telegram/test\',{method:\'POST\'}),j=await r.json();$(\'tgMessage\').textContent=j.message||j.error||\'—\'}\nasync function saveSettings(){let body={min_distance_bp:+$(\'minbp\').value,edge_min_points:+$(\'edgeMin\').value,fee_buffer_cents:+$(\'fee\').value,bankroll_dollars:+$(\'bankroll\').value,kelly_fraction:+$(\'kf\').value,risk_cap_pct:+$(\'cap\').value,max_basis_gap_bp:+$(\'basisMax\').value};await fetch(\'/api/settings\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify(body)});}\nsetInterval(refresh,1000);refresh();\n</script></body></html>\n'
 
 
-# v2.3 augments the original BTC dashboard instead of replacing it. This keeps the proven BTC UI intact.
+# v2.4 augments the original BTC dashboard instead of replacing it. This keeps the proven BTC UI intact.
 _V23_STYLE = r"""
 <style>
 .v23-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.v23-card{background:#11151d;border:1px solid #283141;border-radius:16px;padding:15px;min-height:148px}.v23-card.entry{border-color:#46d369;box-shadow:0 0 0 1px #46d369 inset}.v23-card.warn2{border-color:#ffbe44}.v23-title{display:flex;justify-content:space-between;gap:8px;align-items:center}.v23-asset{font-size:21px;font-weight:900}.v23-status{font-size:11px;color:#98a2b3;text-align:right}.v23-main{font-size:23px;font-weight:800;margin-top:11px}.v23-meta{font-size:12px;color:#98a2b3;line-height:1.55;margin-top:7px}.v23-table{width:100%;border-collapse:collapse;font-size:12px}.v23-table th,.v23-table td{padding:8px 6px;border-bottom:1px solid #283141;text-align:right}.v23-table th:first-child,.v23-table td:first-child{text-align:left}.v23-kpi{font-size:25px;font-weight:900;margin-top:6px}.v23-rank{font-size:14px;line-height:1.6}.v23-good{color:#46d369}.v23-bad{color:#ff625d}.v23-warn{color:#ffbe44}
@@ -31,20 +31,27 @@ _V23_STYLE = r"""
 </style>
 """
 _V23_HTML = r"""
-<div class="section">Multiasset · forward-test autónomo</div>
+<div class="section">Multiasset · Execution Lab</div>
 <div class="v23-grid" id="v23Assets"></div>
 <div class="section">Live research</div>
 <div class="grid">
  <div class="card"><div class="label">Setups resueltos</div><div class="v23-kpi" id="v23Resolved">0</div><div class="small">primer setup por vela</div></div>
  <div class="card"><div class="label">Shadow entries</div><div class="v23-kpi" id="v23Entries">0</div><div class="small">precio + estructura + basis</div></div>
  <div class="card"><div class="label">Hit rate live</div><div class="v23-kpi" id="v23Hit">—</div><div class="small">solo entries ya finalizadas</div></div>
- <div class="card"><div class="label">PnL simulado</div><div class="v23-kpi" id="v23Pnl">—</div><div class="small">1 contrato/entry · gross before actual fees</div></div>
+ <div class="card"><div class="label">PnL simulado</div><div class="v23-kpi" id="v23Pnl">—</div><div class="small">1 contrato/entry · neto con fee model</div></div>
+</div>
+<div class="section">Portfolio shadow · riesgo correlacionado</div>
+<div class="grid">
+ <div class="card"><div class="label">Portfolio entries</div><div class="v23-kpi" id="v24PortfolioEntries">0</div><div class="small">máx. 1 crypto por ventana 15m</div></div>
+ <div class="card"><div class="label">Portfolio hit</div><div class="v23-kpi" id="v24PortfolioHit">—</div><div class="small">política no-lookahead</div></div>
+ <div class="card"><div class="label">Portfolio net PnL</div><div class="v23-kpi" id="v24PortfolioPnl">—</div><div class="small">1 contrato por ventana seleccionada</div></div>
+ <div class="card"><div class="label">Max drawdown</div><div class="v23-kpi" id="v24MaxDD">—</div><div class="small">shadow all-entries</div></div>
 </div>
 <div class="section">Ranking activo</div>
 <div class="card"><div class="v23-rank" id="v23Ranking">No hay ENTRY ZONE activa.</div></div>
 <div class="section">Calibración por activo</div>
-<div class="card" style="overflow:auto"><table class="v23-table"><thead><tr><th>Activo</th><th>Threshold</th><th>Fair cons.</th><th>Resueltos</th><th>Hit live</th><th>Δ fair</th><th>Entries</th><th>PnL</th></tr></thead><tbody id="v23Metrics"></tbody></table></div>
-<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button" onclick="location.href='/api/multiasset/ledger.csv'">Descargar ledger v2.3</button><button class="button" onclick="location.href='/api/multiasset/journal'">Journal raw v2.2+</button></div>
+<div class="card" style="overflow:auto"><table class="v23-table"><thead><tr><th>Activo</th><th>Threshold</th><th>Fair cons.</th><th>Resueltos</th><th>Hit live</th><th>Δ fair</th><th>Entries</th><th>Net PnL</th><th>Wilson</th><th>Bench Δ</th><th>Gate</th></tr></thead><tbody id="v23Metrics"></tbody></table></div>
+<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button" onclick="location.href='/api/multiasset/ledger.csv'">Descargar ledger v2.4</button><button class="button" onclick="location.href='/api/multiasset/journal'">Journal raw v2.2+</button></div>
 """
 _V23_JS = r"""
 <script>
@@ -56,16 +63,21 @@ async function refreshV23(){
   const states=sj.states||{}, primary=sj.btc||{};
   const all={BTC:{asset:'BTC',status:primary.status||'—',current_minute:primary.current_minute,distance_bp:primary.distance_bp,threshold_bp:null,side:primary.side,selected_ask_cents:primary.selected_ask_cents,edge_points:primary.edge_points,basis_ok:primary.basis_ok},...states};
   const order=['BTC','ETH','SOL','XRP','DOGE','BNB'];
-  document.getElementById('v23Assets').innerHTML=order.map(a=>{let s=all[a]||{};let cl=(s.status||'').includes('ENTRY ZONE')?'entry':((s.status||'').includes('WARNING')?'warn2':'');let th=s.threshold_bp==null?'BTC dynamic':('≥'+v23fmt(s.threshold_bp,0)+'bp');return `<div class="v23-card ${cl}"><div class="v23-title"><div class="v23-asset">${a}</div><div class="v23-status">${s.status||'—'}</div></div><div class="v23-main">${s.side||'—'} · M${s.current_minute??'—'}</div><div class="v23-meta">dist ${v23fmt(s.distance_bp,1)}bp · ${th}<br>ask ${v23fmt(s.selected_ask_cents,1)}¢ · edge ${v23fmt(s.edge_points,1)}pt<br>basis ${s.basis_ok===true?'OK':(s.basis_ok===false?'BLOCK':'—')}</div></div>`}).join('');
+  document.getElementById('v23Assets').innerHTML=order.map(a=>{let s=all[a]||{};let cl=(s.status||'').includes('ENTRY ZONE')?'entry':((s.status||'').includes('WARNING')?'warn2':'');let th=s.threshold_bp==null?'BTC dynamic':('≥'+v23fmt(s.threshold_bp,0)+'bp');return `<div class="v23-card ${cl}"><div class="v23-title"><div class="v23-asset">${a}</div><div class="v23-status">${s.status||'—'}</div></div><div class="v23-main">${s.side||'—'} · M${s.current_minute??'—'}</div><div class="v23-meta">dist ${v23fmt(s.distance_bp,1)}bp · ${th}<br>ask ${v23fmt(s.selected_ask_cents,1)}¢ · edge net ${v23fmt(s.edge_points,1)}pt<br>spread ${v23fmt(s.spread_cents,1)}¢ · fee est ${v23fmt(s.estimated_taker_fee_cents,2)}¢<br>basis ${s.basis_ok===true?'OK':(s.basis_ok===false?'BLOCK':'—')}</div></div>`}).join('');
   const t=mj.totals||{};
   document.getElementById('v23Resolved').textContent=t.resolved_setups??0;
   document.getElementById('v23Entries').textContent=t.resolved_entries??0;
   document.getElementById('v23Hit').textContent=t.entry_hit_pct==null?'—':v23fmt(t.entry_hit_pct,1)+'%';
-  let pnl=t.entry_gross_pnl_dollars;document.getElementById('v23Pnl').textContent=pnl==null?'—':((pnl>=0?'+':'')+'$'+v23fmt(pnl,2));
+  let pnl=t.entry_net_pnl_dollars;document.getElementById('v23Pnl').textContent=pnl==null?'—':((pnl>=0?'+':'')+'$'+v23fmt(pnl,2));
   document.getElementById('v23Pnl').className='v23-kpi '+(pnl>0?'v23-good':pnl<0?'v23-bad':'');
+  document.getElementById('v24PortfolioEntries').textContent=t.portfolio_entries??0;
+  document.getElementById('v24PortfolioHit').textContent=t.portfolio_hit_pct==null?'—':v23fmt(t.portfolio_hit_pct,1)+'%';
+  let pp=t.portfolio_net_pnl_dollars;document.getElementById('v24PortfolioPnl').textContent=pp==null?'—':((pp>=0?'+':'')+'$'+v23fmt(pp,2));
+  document.getElementById('v24PortfolioPnl').className='v23-kpi '+(pp>0?'v23-good':pp<0?'v23-bad':'');
+  document.getElementById('v24MaxDD').textContent='$'+v23fmt(t.entry_max_drawdown_dollars||0,2);
   let ranks=mj.active_ranking||[];document.getElementById('v23Ranking').innerHTML=ranks.length?ranks.map((r,i)=>`${i+1}. <b>${r.asset} ${r.side}</b> · edge ${v23fmt(r.edge_points,1)}pt · ask ${v23fmt(r.ask_cents,1)}¢ · M${r.minute}`).join('<br>'):'No hay ENTRY ZONE activa.';
-  let rows=(mj.by_asset||[]).map(r=>`<tr><td><b>${r.asset}</b></td><td>≥${v23fmt(r.threshold_bp,0)}bp</td><td>${v23fmt(r.conservative_fair_pct,1)}%</td><td>${r.resolved_setups}</td><td>${r.calibration_hit_pct==null?'—':v23fmt(r.calibration_hit_pct,1)+'%'}</td><td>${r.calibration_delta_points==null?'—':(r.calibration_delta_points>=0?'+':'')+v23fmt(r.calibration_delta_points,1)}</td><td>${r.resolved_entries}</td><td>${r.entry_gross_pnl_dollars==null?'—':(r.entry_gross_pnl_dollars>=0?'+':'')+'$'+v23fmt(r.entry_gross_pnl_dollars,2)}</td></tr>`).join('');document.getElementById('v23Metrics').innerHTML=rows;
- }catch(e){console.log('v2.3 dashboard',e)}
+  let rows=(mj.by_asset||[]).map(r=>`<tr><td><b>${r.asset}</b></td><td>≥${v23fmt(r.threshold_bp,0)}bp</td><td>${v23fmt(r.conservative_fair_pct,1)}%</td><td>${r.resolved_setups}</td><td>${r.calibration_hit_pct==null?'—':v23fmt(r.calibration_hit_pct,1)+'%'}</td><td>${r.calibration_delta_points==null?'—':(r.calibration_delta_points>=0?'+':'')+v23fmt(r.calibration_delta_points,1)}</td><td>${r.resolved_entries}</td><td>${r.entry_net_pnl_dollars==null?'—':(r.entry_net_pnl_dollars>=0?'+':'')+'$'+v23fmt(r.entry_net_pnl_dollars,2)}</td><td>${r.entry_wilson_low_pct==null?'—':v23fmt(r.entry_wilson_low_pct,1)+'%'}</td><td>${r.benchmark_disagreement_pct==null?'—':v23fmt(r.benchmark_disagreement_pct,1)+'%'}</td><td>${r.promotion_gate||'COLLECTING'}</td></tr>`).join('');document.getElementById('v23Metrics').innerHTML=rows;
+ }catch(e){console.log('v2.4 dashboard',e)}
 }
 setInterval(refreshV23,2000);refreshV23();
 </script>
@@ -84,7 +96,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.3-railway-autonomous-research"
+APP_VERSION = "2.4-railway-execution-lab"
 
 
 def load_json(path):
@@ -216,6 +228,74 @@ def bp(a, b):
     if not a or not b:
         return None
     return (a / b - 1.0) * 10000.0
+
+def kalshi_trade_fee_cents(price_cents, count=1.0, rate=0.07):
+    """Estimated taker trade fee using Kalshi's general quadratic fee model.
+
+    Returns cents. The trade-fee component is rounded up to the nearest centicent
+    ($0.0001). Exchange balance-rounding/rebates can make the posted net fee differ
+    slightly, so the configured fee_buffer_cents remains a conservative floor.
+    """
+    try:
+        p=max(0.0,min(1.0,float(price_cents)/100.0)); c=max(0.0,float(count))
+        raw=float(rate)*c*p*(1.0-p)  # dollars
+        return math.ceil(raw*10000.0-1e-12)/100.0  # cents
+    except Exception:
+        return None
+
+
+def effective_fee_cents(price_cents, config, count=1.0):
+    model=kalshi_trade_fee_cents(price_cents,count=count)
+    floor=float(config.get("fee_buffer_cents",1.0))
+    return max(floor, model if model is not None else floor)
+
+
+def max_buy_with_fee(cons_pct, edge_min_points, config):
+    if cons_pct is None:return None
+    # 15m crypto typically trades on cent ticks in the middle of the range. This
+    # display value is conservative; actual entry qualification uses the live ask.
+    best=None
+    for ask in range(1,100):
+        fee=effective_fee_cents(ask,config,1.0)
+        if float(cons_pct)-ask-fee >= float(edge_min_points):best=float(ask)
+    return best
+
+
+def parse_orderbook_asks(payload, selected_side):
+    """Convert Kalshi bid-only binary orderbook into asks for the side we buy."""
+    ob=(payload or {}).get("orderbook_fp") or (payload or {}).get("orderbook") or {}
+    # YES ask = 1 - NO bid; NO ask = 1 - YES bid.
+    src=ob.get("no_dollars") if selected_side=="UP" else ob.get("yes_dollars")
+    levels=[]
+    for row in src or []:
+        try:
+            bid=float(row[0]); qty=float(row[1]); ask=(1.0-bid)*100.0
+            if qty>0 and 0<=ask<=100:levels.append((ask,qty))
+        except Exception:pass
+    levels.sort(key=lambda x:x[0])
+    return levels
+
+
+def orderbook_vwap(levels, qty):
+    try:need=float(qty)
+    except Exception:return None,None
+    if need<=0:return None,0.0
+    remain=need;cost=0.0;filled=0.0
+    for price,size in levels:
+        take=min(remain,float(size))
+        if take<=0:continue
+        cost += take*float(price);filled += take;remain -= take
+        if remain<=1e-9:break
+    if filled<=0:return None,0.0
+    return (cost/filled if remain<=1e-9 else None),filled
+
+
+def max_drawdown_dollars(records, pnl_field):
+    equity=peak=0.0;maxdd=0.0
+    for r in sorted(records,key=lambda x:(x.get("entry_time") or x.get("recorded_at") or "")):
+        equity += float(r.get(pnl_field) or 0.0)/100.0
+        peak=max(peak,equity);maxdd=max(maxdd,peak-equity)
+    return round(maxdd,4)
 
 
 def extract_target(market):
@@ -367,6 +447,13 @@ class Monitor:
         self.last_alert_key = ""
         self.demo_t0 = time.time()
         self.last_loop_at = time.time()
+        self.first_signal_path = DATA_DIR / "btc_first_signal_v24.json"
+        self.first_signal = {}
+        try:
+            if self.first_signal_path.exists():
+                x=load_json(self.first_signal_path)
+                if isinstance(x,dict):self.first_signal=x
+        except Exception:pass
         self.ensure_journal()
 
     def ensure_journal(self):
@@ -495,7 +582,7 @@ class Monitor:
             yes_bid,yes_ask,no_bid,no_ask=get_price_fields(market)
 
         target_gap=bp(target,model_open) if target else None
-        target_side=("UP" if btc_price>target else "DOWN") if target else "—"
+        target_side=("UP" if last_close>target else "DOWN") if target and last_close is not None else "—"
         max_basis=float(self.config.get("max_basis_gap_bp",8.0))
         basis_ok=True
         if target_gap is not None:
@@ -551,6 +638,27 @@ class Monitor:
             contracts_suggested=contracts_suggested,basis_ok=basis_ok,api_error=""
         )
 
+    def apply_first_signal_guard(self,s):
+        """Match the historical protocol: first qualifying pullback per 15m candle.
+
+        Status transitions within the same completed minute (e.g. CONFIRMED -> ENTRY
+        ZONE as the quote moves) remain allowed. Later qualifying minutes in the same
+        candle are displayed but are not treated as a new evidence-backed signal.
+        """
+        if s.status not in ("CONFIRMED","ENTRY ZONE","READY / PRICE HIGH","BASIS WARNING"):
+            return s
+        key=s.market_ticker or f"{s.model_open}|{int(time.time()//900)}"
+        prev=self.first_signal if self.first_signal.get("window_key")==key else {}
+        if prev and prev.get("minute")!=s.last_completed_minute:
+            s.status="ALREADY COUNTED"
+            s.status_detail=f"Primer pullback calificante de esta vela ya fue contado en M{prev.get('minute')}."
+            return s
+        if not prev:
+            self.first_signal={"window_key":key,"minute":s.last_completed_minute,"side":s.side,"saved_at":s.updated_at}
+            try:save_json(self.first_signal_path,self.first_signal)
+            except Exception:pass
+        return s
+
     def maybe_alert(self, s):
         statuses=set(self.config.get("telegram_alert_statuses", []))
         if s.status not in statuses:
@@ -597,6 +705,7 @@ class Monitor:
                     s=self.demo_state()
                 else:
                     now=datetime.now(timezone.utc);s=self.compute(self.fetch_binance(),self.fetch_kalshi(now))
+                    s=self.apply_first_signal_guard(s)
                 with self.lock:self.state=s
                 self.maybe_alert(s)
             except Exception as e:
@@ -680,6 +789,13 @@ class AltShadowMonitor:
         self.kalshi_last[asset] = time.time()
         return market
 
+    def fetch_orderbook(self,ticker):
+        if not ticker:return {}
+        try:
+            return http_json(KALSHI_BASE+"/markets/"+ticker+"/orderbook?"+urlencode({"depth":100}),timeout=5)
+        except Exception as e:
+            return {"_error":str(e)}
+
     def compute(self, asset, model, klines, market):
         now = datetime.now(timezone.utc)
         now_ms = int(now.timestamp()*1000)
@@ -717,16 +833,19 @@ class AltShadowMonitor:
             yes_bid,yes_ask,no_bid,no_ask=get_price_fields(market)
 
         target_gap = bp(target, model_open) if target else None
-        target_side = ("UP" if live_price>target else "DOWN") if target else "—"
+        target_side = ("UP" if last_close>target else "DOWN") if target and last_close is not None else "—"
         max_basis=float(self.primary.config.get("max_basis_gap_bp",8.0))
         # If a target cannot be extracted, shadow logging continues but entry status is blocked.
         basis_ok = bool(target is not None and target_gap is not None and abs(target_gap)<=max_basis and (side=="—" or target_side==side))
 
         selected_ask = yes_ask*100 if side=="UP" and yes_ask is not None else (no_ask*100 if side=="DOWN" and no_ask is not None else None)
+        selected_bid = yes_bid*100 if side=="UP" and yes_bid is not None else (no_bid*100 if side=="DOWN" and no_bid is not None else None)
+        spread=(selected_ask-selected_bid) if selected_ask is not None and selected_bid is not None else None
         edge_min=float(self.primary.config.get("edge_min_points",10.0))
-        fee_buf=float(self.primary.config.get("fee_buffer_cents",1.0))
-        max_buy=model["cons_pct"]-edge_min-fee_buf
-        edge=(model["cons_pct"]-selected_ask-fee_buf) if selected_ask is not None else None
+        fee_est=kalshi_trade_fee_cents(selected_ask,1.0) if selected_ask is not None else None
+        eff_fee=effective_fee_cents(selected_ask,self.primary.config,1.0) if selected_ask is not None else None
+        max_buy=max_buy_with_fee(model["cons_pct"],edge_min,self.primary.config)
+        edge=(model["cons_pct"]-selected_ask-eff_fee) if selected_ask is not None and eff_fee is not None else None
 
         status="WAIT"
         detail=f"Waiting for M7-M10 pullback >= {model['min_bp']:.0f} bp."
@@ -736,7 +855,7 @@ class AltShadowMonitor:
             if not basis_ok:
                 status="BASIS WARNING"
                 detail="Underlying setup confirmed, but Kalshi target/basis is missing or not aligned."
-            elif selected_ask is not None and selected_ask<=max_buy:
+            elif edge is not None and edge>=edge_min:
                 status="SHADOW ENTRY ZONE"
                 detail="Structure + live Kalshi ask satisfy the conservative shadow edge test."
             elif selected_ask is None:
@@ -755,7 +874,8 @@ class AltShadowMonitor:
             "market_ticker":ticker,"kalshi_target":target,"target_gap_bp":target_gap,"target_side":target_side,
             "yes_bid_cents":yes_bid*100 if yes_bid is not None else None,"yes_ask_cents":yes_ask*100 if yes_ask is not None else None,
             "no_bid_cents":no_bid*100 if no_bid is not None else None,"no_ask_cents":no_ask*100 if no_ask is not None else None,
-            "selected_contract":side if side in ("UP","DOWN") else "—","selected_ask_cents":selected_ask,
+            "selected_contract":side if side in ("UP","DOWN") else "—","selected_ask_cents":selected_ask,"selected_bid_cents":selected_bid,"spread_cents":spread,
+            "estimated_taker_fee_cents":fee_est,"effective_fee_cents":eff_fee,"kalshi_distance_bp":abs(bp(last_close,target)) if target and last_close is not None else None,
             "max_buy_cents":max_buy,"edge_points":edge,"basis_ok":basis_ok,"api_error":""
         }
 
@@ -767,6 +887,7 @@ class AltShadowMonitor:
         key=f"{s['asset']}|{s['window_start_utc']}"
         if self.last_journal_key.get(s["asset"])==key or self.ledger.has_setup(key):
             self.last_journal_key[s["asset"]]=key
+            self.ledger.observe_state(s)
             return
         self.last_journal_key[s["asset"]]=key
         with open(ALT_JOURNAL_PATH,"a",newline="",encoding="utf-8") as f:
@@ -778,6 +899,7 @@ class AltShadowMonitor:
                 s["edge_points"],s["kalshi_target"],s["target_gap_bp"],s["basis_ok"]
             ])
         self.ledger.record_setup(s)
+        self.ledger.observe_state(s)
 
     def maybe_alert(self, s):
         if s["status"] not in ("SHADOW ENTRY ZONE","BASIS WARNING"):
@@ -805,9 +927,9 @@ class AltShadowMonitor:
         if self.startup_sent:
             return
         self.startup_sent=True
-        lines=["Multiasset SHADOW monitor v2.3 ✅",
+        lines=["Multiasset EXECUTION LAB v2.4 ✅",
                "ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
-               "Auto-resolve Kalshi + PnL simulado + reporte diario + watchdog.",
+               "Fees + orderbook depth + benchmark audit + portfolio shadow + promotion gates.",
                "BTC sigue igual. HYPE excluido. Sin órdenes automáticas."]
         post_telegram(telegram_token(), telegram_chat_id(self.primary.config), "\n".join(lines))
 
@@ -844,6 +966,10 @@ class AltShadowMonitor:
                 self.maybe_alert(s)
                 time.sleep(float(os.getenv("ALT_ASSET_STAGGER_SECONDS","0.15")))
             try:
+                self.ledger.observe_portfolio(self.get_states())
+            except Exception as e:
+                print("portfolio shadow:",e,flush=True)
+            try:
                 self.ledger.maybe_resolve()
             except Exception as e:
                 print("shadow ledger resolver:",e,flush=True)
@@ -854,7 +980,7 @@ ALT_MONITOR=None
 
 
 SHADOW_LEDGER_PATH = DATA_DIR / "multiasset_shadow_ledger_v23.json"
-SHADOW_LEDGER_CSV_NAME = "multiasset_shadow_ledger_v23.csv"
+SHADOW_LEDGER_CSV_NAME = "multiasset_shadow_ledger_v24.csv"
 
 
 def iso_to_ms(x):
@@ -874,15 +1000,28 @@ class ShadowLedger:
     def __init__(self, alt_monitor):
         self.alt = alt_monitor
         self.lock = threading.Lock()
-        self.data = {"version":"2.3","setups":{},"last_daily_report_date":"","created_at":datetime.now(timezone.utc).isoformat()}
+        self.data = {"version":"2.4","setups":{},"portfolio_windows":{},"last_daily_report_date":"","created_at":datetime.now(timezone.utc).isoformat()}
         if SHADOW_LEDGER_PATH.exists():
             try:
                 old=load_json(SHADOW_LEDGER_PATH)
                 if isinstance(old,dict):
                     self.data.update(old)
                     self.data.setdefault("setups",{})
+                    self.data.setdefault("portfolio_windows",{})
+                    self.data["version"]="2.4"
             except Exception as e:
                 print("ledger load:",e,flush=True)
+        # Migrate v2.3 rows in-place without losing forward-test history.
+        for rec in self.data.get("setups",{}).values():
+            rec.setdefault("portfolio_selected",False);rec.setdefault("benchmark_disagreement",None)
+            if rec.get("entry_simulated") and rec.get("entry_ask_cents") is None and rec.get("ask_cents") is not None:
+                rec["entry_ask_cents"]=rec.get("ask_cents");rec["entry_time"]=rec.get("recorded_at") or "";rec["entry_minute"]=rec.get("minute")
+                rec["entry_fee_cents"]=effective_fee_cents(rec.get("ask_cents"),self.alt.primary.config,1.0);rec["entry_net_edge_points"]=rec.get("edge_points")
+            if rec.get("resolved") and rec.get("entry_simulated") and rec.get("gross_pnl_cents") is not None and rec.get("net_pnl_cents") is None:
+                fee=float(rec.get("entry_fee_cents") or effective_fee_cents(rec.get("entry_ask_cents") or rec.get("ask_cents"),self.alt.primary.config,1.0))
+                rec["estimated_fee_pnl_cents"]=fee;rec["net_pnl_cents"]=float(rec.get("gross_pnl_cents"))-fee
+            if rec.get("underlying_model_win") is not None and rec.get("kalshi_win") is not None:
+                rec["benchmark_disagreement"]=(bool(rec.get("underlying_model_win"))!=bool(rec.get("kalshi_win")))
         self.last_resolve_check=0.0
         self.save()
 
@@ -896,7 +1035,6 @@ class ShadowLedger:
             if setup_id in self.data["setups"]:
                 return False
             wms=iso_to_ms(s.get("window_start_utc"))
-            entry_ok=(s.get("status")=="SHADOW ENTRY ZONE" and s.get("basis_ok") is True and s.get("selected_ask_cents") is not None)
             self.data["setups"][setup_id]={
                 "setup_id":setup_id,"recorded_at":s.get("updated_at"),"asset":s.get("asset"),
                 "window_start_utc":s.get("window_start_utc"),"window_start_ms":wms,"window_end_ms":wms+900000 if wms else None,
@@ -906,13 +1044,81 @@ class ShadowLedger:
                 "sample_n":s.get("sample_n"),"holdout_n":s.get("holdout_n"),"holdout_pct":s.get("holdout_pct"),
                 "market_ticker":s.get("market_ticker"),"kalshi_target":s.get("kalshi_target"),"target_gap_bp":s.get("target_gap_bp"),
                 "basis_ok":s.get("basis_ok"),"ask_cents":s.get("selected_ask_cents"),"max_buy_cents":s.get("max_buy_cents"),
-                "edge_points":s.get("edge_points"),"entry_simulated":entry_ok,"entry_alert_sent":False,"basis_alert_sent":False,
-                "resolved":False,"kalshi_result":"","kalshi_status":"","settlement_ts":"","settlement_value_dollars":None,"underlying_final_close":None,
-                "underlying_model_win":None,"kalshi_win":None,"gross_pnl_cents":None,"buffer_adjusted_pnl_cents":None,
+                "edge_points":s.get("edge_points"),"setup_bid_cents":s.get("selected_bid_cents"),"setup_spread_cents":s.get("spread_cents"),
+                "setup_fee_est_cents":s.get("estimated_taker_fee_cents"),"entry_simulated":False,"entry_alert_sent":False,"basis_alert_sent":False,
+                "entry_time":"","entry_minute":None,"entry_ask_cents":None,"entry_bid_cents":None,"entry_spread_cents":None,"entry_fee_cents":None,"entry_net_edge_points":None,
+                "book_available":None,"book_error":"","book_depth_at_max":None,"book_vwap_1_cents":None,"book_vwap_risk_cents":None,"book_risk_contracts":None,
+                "portfolio_selected":False,"resolved":False,"kalshi_result":"","kalshi_status":"","settlement_ts":"","settlement_value_dollars":None,"underlying_final_close":None,
+                "underlying_model_win":None,"kalshi_win":None,"benchmark_disagreement":None,"gross_pnl_cents":None,"estimated_fee_pnl_cents":None,"net_pnl_cents":None,"buffer_adjusted_pnl_cents":None,
                 "resolution_error":""
             }
             save_json(SHADOW_LEDGER_PATH,self.data)
         return True
+
+    def observe_state(self,s):
+        """Capture the first actually executable quote for the already-counted setup.
+
+        This fixes the v2.3 distinction between *setup detection* and *execution*:
+        a setup can be confirmed while price is high and become cheap later within
+        the same completed signal minute. We preserve one statistical setup per candle
+        while recording the first real SHADOW ENTRY ZONE quote separately.
+        """
+        setup_id=f"{s.get('asset')}|{s.get('window_start_utc')}"
+        with self.lock:
+            rec=self.data.get("setups",{}).get(setup_id)
+            if not rec:return False
+            if rec.get("entry_simulated"):return False
+            if s.get("status")!="SHADOW ENTRY ZONE" or s.get("basis_ok") is not True:return False
+            if rec.get("minute")!=s.get("last_completed_minute"):return False
+        ask=s.get("selected_ask_cents")
+        if ask is None:return False
+        book=self.alt.fetch_orderbook(s.get("market_ticker"))
+        levels=parse_orderbook_asks(book,s.get("side")) if not book.get("_error") else []
+        risk_dollars=float(self.alt.primary.config.get("bankroll_dollars",1000.0))*float(self.alt.primary.config.get("risk_cap_pct",1.0))/100.0
+        per_contract=(float(ask)+effective_fee_cents(ask,self.alt.primary.config,1.0))/100.0
+        risk_contracts=max(1,int(risk_dollars/per_contract)) if per_contract>0 else 1
+        vwap1,fill1=orderbook_vwap(levels,1.0)
+        vwapr,fillr=orderbook_vwap(levels,risk_contracts)
+        maxbuy=s.get("max_buy_cents")
+        depth=sum(q for p,q in levels if maxbuy is not None and p<=float(maxbuy)) if levels else None
+        with self.lock:
+            rec=self.data.get("setups",{}).get(setup_id)
+            if not rec or rec.get("entry_simulated"):return False
+            rec.update({
+                "entry_simulated":True,"entry_time":s.get("updated_at"),"entry_minute":s.get("last_completed_minute"),
+                "entry_ask_cents":float(ask),"entry_bid_cents":s.get("selected_bid_cents"),"entry_spread_cents":s.get("spread_cents"),
+                "entry_fee_cents":effective_fee_cents(ask,self.alt.primary.config,1.0),"entry_net_edge_points":s.get("edge_points"),
+                "book_available":bool(levels),"book_error":book.get("_error","") if isinstance(book,dict) else "",
+                "book_depth_at_max":depth,"book_vwap_1_cents":vwap1,"book_vwap_risk_cents":vwapr,"book_risk_contracts":risk_contracts,
+                "book_fill_1":fill1,"book_fill_risk":fillr,
+            })
+            save_json(SHADOW_LEDGER_PATH,self.data)
+        return True
+
+    def observe_portfolio(self,states):
+        """Non-lookahead correlated-crypto shadow portfolio: max one pick per 15m window.
+
+        On the first polling cycle where one or more assets are simultaneously in an
+        executable ENTRY ZONE, pick the highest net edge. Later opportunities cannot
+        replace it; this avoids hindsight selection.
+        """
+        cands=[]
+        for asset,s in (states or {}).items():
+            if s.get("status")!="SHADOW ENTRY ZONE":continue
+            sid=f"{asset}|{s.get('window_start_utc')}"
+            with self.lock:r=dict(self.data.get("setups",{}).get(sid,{}) or {})
+            if r.get("entry_simulated"):
+                cands.append((float(r.get("entry_net_edge_points") or -999),sid,r))
+        if not cands:return None
+        cands.sort(reverse=True,key=lambda x:x[0]);_,sid,best=cands[0]
+        window=best.get("window_start_utc")
+        with self.lock:
+            pw=self.data.setdefault("portfolio_windows",{})
+            if window in pw:return pw[window]
+            pw[window]={"window_start_utc":window,"setup_id":sid,"asset":best.get("asset"),"selected_at":datetime.now(timezone.utc).isoformat(),"entry_net_edge_points":best.get("entry_net_edge_points")}
+            if sid in self.data.get("setups",{}):self.data["setups"][sid]["portfolio_selected"]=True
+            save_json(SHADOW_LEDGER_PATH,self.data)
+            return dict(pw[window])
 
     def has_setup(self,setup_id):
         with self.lock:return setup_id in self.data.get("setups",{})
@@ -977,13 +1183,16 @@ class ShadowLedger:
         rec["kalshi_win"]=bool(win)
         rec["resolved"]=True
         rec["resolved_at"]=datetime.now(timezone.utc).isoformat()
-        if rec.get("entry_simulated") and rec.get("ask_cents") is not None:
-            ask=float(rec["ask_cents"])
+        if rec.get("underlying_model_win") is not None:
+            rec["benchmark_disagreement"]=(bool(rec.get("underlying_model_win"))!=bool(rec.get("kalshi_win")))
+        if rec.get("entry_simulated") and rec.get("entry_ask_cents") is not None:
+            ask=float(rec["entry_ask_cents"])
             gross=(100.0-ask) if win else -ask
-            buf=float(self.alt.primary.config.get("fee_buffer_cents",1.0))
+            fee=float(rec.get("entry_fee_cents") or effective_fee_cents(ask,self.alt.primary.config,1.0))
             rec["gross_pnl_cents"]=gross
-            # This is only a conservative placeholder; it is not claimed as actual Kalshi fee accounting.
-            rec["buffer_adjusted_pnl_cents"]=gross-buf
+            rec["estimated_fee_pnl_cents"]=fee
+            rec["net_pnl_cents"]=gross-fee
+            rec["buffer_adjusted_pnl_cents"]=gross-float(self.alt.primary.config.get("fee_buffer_cents",1.0))
         return True
 
     def maybe_resolve(self):
@@ -1014,50 +1223,76 @@ class ShadowLedger:
     def send_resolution(self,rec):
         if os.getenv("SHADOW_RESOLUTION_ALERTS","1").lower() not in ("1","true","yes"):return
         icon="✅" if rec.get("kalshi_win") else "❌"
-        pnl=(rec.get("gross_pnl_cents") or 0)/100.0
+        pnl=(rec.get("net_pnl_cents") or 0)/100.0
         text=(f"{rec['asset']}15M SHADOW RESULT {icon}\n"
               f"{rec['side']} · Kalshi result {str(rec.get('kalshi_result')).upper()}\n"
-              f"Entry {float(rec.get('ask_cents') or 0):.1f}c · gross 1 contract {pnl:+.2f}$\n"
+              f"Entry {float(rec.get('entry_ask_cents') or 0):.1f}c · net fee-model 1 contract {pnl:+.2f}$\n"
               f"Forward-test only")
         post_telegram(telegram_token(),telegram_chat_id(self.alt.primary.config),text)
 
     def metrics(self,states=None):
         with self.lock: setups=[dict(x) for x in self.data.get("setups",{}).values()]
         rows=[]
-        totals={"recorded_setups":len(setups),"resolved_setups":0,"resolved_entries":0,"entry_wins":0,"entry_losses":0,"entry_hit_pct":None,"entry_gross_pnl_dollars":0.0,"pending_setups":0}
+        totals={"recorded_setups":len(setups),"resolved_setups":0,"resolved_entries":0,"entry_wins":0,"entry_losses":0,"entry_hit_pct":None,
+                "entry_gross_pnl_dollars":0.0,"entry_net_pnl_dollars":0.0,"entry_max_drawdown_dollars":0.0,"pending_setups":0,
+                "portfolio_entries":0,"portfolio_wins":0,"portfolio_losses":0,"portfolio_hit_pct":None,"portfolio_net_pnl_dollars":0.0,"portfolio_max_drawdown_dollars":0.0}
+        all_entries=[];portfolio_entries=[]
         for asset,model in self.alt.models.items():
             aa=[r for r in setups if r.get("asset")==asset]
             rr=[r for r in aa if r.get("resolved")]
-            # Calibration uses basis-aligned first setups with actual Kalshi result, whether or not price qualified for entry.
             cal=[r for r in rr if r.get("basis_ok") is True and r.get("kalshi_win") is not None]
             ent=[r for r in rr if r.get("entry_simulated") and r.get("kalshi_win") is not None]
-            wins=sum(1 for r in ent if r.get("kalshi_win")); losses=len(ent)-wins
+            all_entries.extend(ent);portfolio_entries.extend([r for r in ent if r.get("portfolio_selected")])
+            wins=sum(1 for r in ent if r.get("kalshi_win"));losses=len(ent)-wins
             calwins=sum(1 for r in cal if r.get("kalshi_win"))
-            pnl=sum(float(r.get("gross_pnl_cents") or 0) for r in ent)/100.0
-            hit=(100*wins/len(ent)) if ent else None
-            calhit=(100*calwins/len(cal)) if cal else None
+            gross=sum(float(r.get("gross_pnl_cents") or 0) for r in ent)/100.0
+            net=sum(float(r.get("net_pnl_cents") or 0) for r in ent)/100.0
+            hit=(100*wins/len(ent)) if ent else None;calhit=(100*calwins/len(cal)) if cal else None
+            wil=wilson_low(wins,len(ent)) if ent else None
+            dis=[r for r in rr if r.get("benchmark_disagreement") is not None]
+            disagree=(100*sum(1 for r in dis if r.get("benchmark_disagreement"))/len(dis)) if dis else None
+            basis_fail=(100*sum(1 for r in aa if r.get("basis_ok") is False)/len(aa)) if aa else None
+            if len(ent)<100:gate=f"COLLECTING {len(ent)}/100"
+            else:
+                caldelta=(calhit-model["cons_pct"]) if calhit is not None else None
+                ok=(wil is not None and wil>=90 and net>0 and caldelta is not None and caldelta>=-5 and (disagree is None or disagree<=5))
+                gate="REVIEW CANDIDATE" if ok else "HOLD"
             rows.append({"asset":asset,"threshold_bp":model["min_bp"],"conservative_fair_pct":model["cons_pct"],
                          "recorded_setups":len(aa),"resolved_setups":len(rr),"calibration_n":len(cal),"calibration_hit_pct":calhit,
                          "calibration_delta_points":(calhit-model["cons_pct"]) if calhit is not None else None,
-                         "resolved_entries":len(ent),"entry_wins":wins,"entry_losses":losses,"entry_hit_pct":hit,"entry_gross_pnl_dollars":pnl})
-            totals["resolved_setups"]+=len(rr);totals["resolved_entries"]+=len(ent);totals["entry_wins"]+=wins;totals["entry_losses"]+=losses;totals["entry_gross_pnl_dollars"]+=pnl
+                         "resolved_entries":len(ent),"entry_wins":wins,"entry_losses":losses,"entry_hit_pct":hit,"entry_wilson_low_pct":wil,
+                         "entry_gross_pnl_dollars":round(gross,4),"entry_net_pnl_dollars":round(net,4),"entry_max_drawdown_dollars":max_drawdown_dollars(ent,"net_pnl_cents"),
+                         "benchmark_disagreement_pct":disagree,"basis_fail_pct":basis_fail,"promotion_gate":gate})
+            totals["resolved_setups"]+=len(rr);totals["resolved_entries"]+=len(ent);totals["entry_wins"]+=wins;totals["entry_losses"]+=losses
+            totals["entry_gross_pnl_dollars"]+=gross;totals["entry_net_pnl_dollars"]+=net
         totals["pending_setups"]=sum(1 for r in setups if not r.get("resolved"))
         if totals["resolved_entries"]:totals["entry_hit_pct"]=100*totals["entry_wins"]/totals["resolved_entries"]
+        totals["entry_max_drawdown_dollars"]=max_drawdown_dollars(all_entries,"net_pnl_cents")
+        pwins=sum(1 for r in portfolio_entries if r.get("kalshi_win"));ploss=len(portfolio_entries)-pwins
+        totals["portfolio_entries"]=len(portfolio_entries);totals["portfolio_wins"]=pwins;totals["portfolio_losses"]=ploss
+        totals["portfolio_hit_pct"]=(100*pwins/len(portfolio_entries)) if portfolio_entries else None
+        totals["portfolio_net_pnl_dollars"]=round(sum(float(r.get("net_pnl_cents") or 0) for r in portfolio_entries)/100.0,4)
+        totals["portfolio_max_drawdown_dollars"]=max_drawdown_dollars(portfolio_entries,"net_pnl_cents")
         active=[]
-        for asset,s in (states or self.alt.get_states()).items():
-            if s.get("status")=="SHADOW ENTRY ZONE":
-                active.append({"asset":asset,"side":s.get("side"),"edge_points":s.get("edge_points"),"ask_cents":s.get("selected_ask_cents"),"minute":s.get("last_completed_minute")})
+        for asset,st in (states or self.alt.get_states()).items():
+            if st.get("status")=="SHADOW ENTRY ZONE":
+                active.append({"asset":asset,"side":st.get("side"),"edge_points":st.get("edge_points"),"ask_cents":st.get("selected_ask_cents"),"minute":st.get("last_completed_minute"),"spread_cents":st.get("spread_cents")})
         active.sort(key=lambda r:(r.get("edge_points") if r.get("edge_points") is not None else -999),reverse=True)
-        totals["entry_gross_pnl_dollars"]=round(totals["entry_gross_pnl_dollars"],4)
-        return {"version":APP_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"totals":totals,"by_asset":rows,"active_ranking":active}
+        totals["entry_gross_pnl_dollars"]=round(totals["entry_gross_pnl_dollars"],4);totals["entry_net_pnl_dollars"]=round(totals["entry_net_pnl_dollars"],4)
+        return {"version":APP_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"fee_model":"general quadratic 0.07; configured buffer is a conservative floor",
+                "promotion_rule":"review only; never auto-promotes or places orders","totals":totals,"by_asset":rows,"active_ranking":active}
 
     def csv_bytes(self):
         import io
-        fields=["setup_id","recorded_at","asset","window_start_utc","signal_status","minute","side","distance_bp","threshold_bp","fair_pct","conservative_fair_pct","market_ticker","kalshi_target","target_gap_bp","basis_ok","ask_cents","max_buy_cents","edge_points","entry_simulated","entry_alert_sent","basis_alert_sent","resolved","kalshi_status","kalshi_result","kalshi_win","settlement_ts","underlying_final_close","underlying_model_win","gross_pnl_cents","buffer_adjusted_pnl_cents","resolution_error"]
+        fields=["setup_id","recorded_at","asset","window_start_utc","signal_status","minute","side","distance_bp","threshold_bp","fair_pct","conservative_fair_pct","market_ticker","kalshi_target","target_gap_bp","basis_ok",
+                "ask_cents","setup_bid_cents","setup_spread_cents","setup_fee_est_cents","max_buy_cents","edge_points","entry_simulated","entry_time","entry_minute","entry_ask_cents","entry_bid_cents","entry_spread_cents","entry_fee_cents","entry_net_edge_points",
+                "book_available","book_error","book_depth_at_max","book_vwap_1_cents","book_vwap_risk_cents","book_risk_contracts","portfolio_selected","entry_alert_sent","basis_alert_sent","resolved","kalshi_status","kalshi_result","kalshi_win","settlement_ts",
+                "underlying_final_close","underlying_model_win","benchmark_disagreement","gross_pnl_cents","estimated_fee_pnl_cents","net_pnl_cents","buffer_adjusted_pnl_cents","resolution_error"]
         buf=io.StringIO();w=csv.DictWriter(buf,fieldnames=fields,extrasaction="ignore");w.writeheader()
         with self.lock: vals=sorted(self.data.get("setups",{}).values(),key=lambda r:r.get("recorded_at") or "")
         for r in vals:w.writerow(r)
         return buf.getvalue().encode("utf-8")
+
 
 
 class DailyShadowReporter:
@@ -1074,12 +1309,15 @@ class DailyShadowReporter:
                     entries=[r for r in resolved if r.get("entry_simulated") and r.get("kalshi_win") is not None]
                     wins=sum(1 for r in entries if r.get("kalshi_win"));losses=len(entries)-wins
                     hit="—" if not entries else f"{100*wins/len(entries):.1f}%"
-                    pnl=sum(float(r.get("gross_pnl_cents") or 0) for r in entries)/100.0
+                    pnl=sum(float(r.get("net_pnl_cents") or 0) for r in entries)/100.0
                     pending=sum(1 for r in day if not r.get("resolved"))
-                    text=(f"BTC15M DAILY SHADOW REPORT · {today} UTC\n"
+                    pentries=[r for r in entries if r.get("portfolio_selected")]
+                    ppnl=sum(float(r.get("net_pnl_cents") or 0) for r in pentries)/100.0
+                    text=(f"BTC15M DAILY EXECUTION LAB · {today} UTC\n"
                           f"Setups {len(day)} · resolved {len(resolved)} · entries {len(entries)}\n"
                           f"Wins {wins} · losses {losses} · hit {hit}\n"
-                          f"Gross simulated PnL (1 contract/entry): ${pnl:+.2f}\n"
+                          f"Net simulated PnL fee-model (1 contract/entry): ${pnl:+.2f}\n"
+                          f"Portfolio 1/window: {len(pentries)} entries · net ${ppnl:+.2f}\n"
                           f"Pending settlement: {pending}")
                     post_telegram(telegram_token(),telegram_chat_id(self.monitor.config),text)
                     with self.ledger.lock:self.ledger.data["last_daily_report_date"]=today
@@ -1396,7 +1634,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200,json.dumps({"ok":True,"version":APP_VERSION,"monitor_loop_age_seconds":round(stale,1),
                                        "multiasset_loop_age_seconds":round(alt_stale,1) if alt_stale is not None else None,
                                        "multiasset_mode":"shadow" if ALT_MONITOR else "off","shadow_resolved_setups":met.get("resolved_setups"),
-                                       "shadow_resolved_entries":met.get("resolved_entries"),"shadow_pending_setups":met.get("pending_setups")}))
+                                       "shadow_resolved_entries":met.get("resolved_entries"),"shadow_pending_setups":met.get("pending_setups"),
+                                       "shadow_net_pnl_dollars":met.get("entry_net_pnl_dollars"),"portfolio_shadow_entries":met.get("portfolio_entries"),
+                                       "portfolio_shadow_net_pnl_dollars":met.get("portfolio_net_pnl_dollars")}))
         elif path=="/":
             self._send(200,DASHBOARD_HTML,"text/html; charset=utf-8")
         elif path=="/api/state":
@@ -1407,7 +1647,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path=="/api/telegram/status":
             self._send(200,json.dumps({"token_present":bool(telegram_token()),"chat_id_present":bool(telegram_chat_id(MONITOR.config)),"configured":bool(telegram_token() and telegram_chat_id(MONITOR.config))}))
         elif path=="/api/multiasset":
-            self._send(200,json.dumps({"mode":"shadow","version":APP_VERSION,"btc":MONITOR.get_state(),"states":ALT_MONITOR.get_states() if ALT_MONITOR else {},"ranking":ALT_MONITOR.ledger.metrics().get("active_ranking",[]) if ALT_MONITOR else []}))
+            self._send(200,json.dumps({"mode":"shadow-execution-lab","version":APP_VERSION,"btc":MONITOR.get_state(),"states":ALT_MONITOR.get_states() if ALT_MONITOR else {},"ranking":ALT_MONITOR.ledger.metrics().get("active_ranking",[]) if ALT_MONITOR else []}))
         elif path=="/api/multiasset/metrics":
             self._send(200,json.dumps(ALT_MONITOR.ledger.metrics() if ALT_MONITOR else {"error":"multiasset off"}))
         elif path=="/api/multiasset/ledger.csv":
