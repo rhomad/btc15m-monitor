@@ -49,6 +49,22 @@ _V23_HTML = r"""
 </div>
 <div class="section">Ranking activo</div>
 <div class="card"><div class="v23-rank" id="v23Ranking">No hay ENTRY ZONE activa.</div></div>
+
+<div class="section">Early Entry Lab · M6–M7 experimental</div>
+<div class="grid">
+ <div class="card"><div class="label">Early captures</div><div class="v23-kpi" id="earlyRecorded">0</div><div class="small">primer precursor M6/M7 por vela</div></div>
+ <div class="card"><div class="label">Early hit</div><div class="v23-kpi" id="earlyHit">—</div><div class="small">resultado Kalshi · exploratorio</div></div>
+ <div class="card"><div class="label">Ask promedio</div><div class="v23-kpi" id="earlyAsk">—</div><div class="small">precio antes del main setup</div></div>
+ <div class="card"><div class="label">Net PnL 1 contrato</div><div class="v23-kpi" id="earlyPnl">—</div><div class="small">todos los early captures con basis OK</div></div>
+</div>
+<div class="grid" style="margin-top:12px">
+ <div class="card"><div class="label">Main follow-through</div><div class="v23-kpi" id="earlyFollow">—</div><div class="small">% que luego llegó al setup estricto</div></div>
+ <div class="card"><div class="label">M6</div><div class="v23-kpi" id="earlyM6">—</div><div class="small">n / hit / avg ask</div></div>
+ <div class="card"><div class="label">M7</div><div class="v23-kpi" id="earlyM7">—</div><div class="small">n / hit / avg ask</div></div>
+ <div class="card"><div class="label">Objetivo</div><div class="v23-kpi">≤90¢</div><div class="small">Telegram avisa solo captures baratos; NO ENTRY</div></div>
+</div>
+<div class="card" style="overflow:auto;margin-top:12px"><table class="v23-table"><thead><tr><th>Activo</th><th>Early th.</th><th>Captures</th><th>Hit</th><th>Avg ask</th><th>Net PnL</th><th>Follow-through</th></tr></thead><tbody id="earlyMetrics"></tbody></table></div>
+<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button" onclick="location.href='/api/early/ledger.csv'">Descargar Early Lab CSV</button></div>
 <div class="section">Calibración por activo</div>
 <div class="card" style="overflow:auto"><table class="v23-table"><thead><tr><th>Activo</th><th>Threshold</th><th>Fair cons.</th><th>Resueltos</th><th>Hit live</th><th>Δ fair</th><th>Entries</th><th>Net PnL</th><th>Wilson</th><th>Bench Δ</th><th>Gate</th></tr></thead><tbody id="v23Metrics"></tbody></table></div>
 <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button" onclick="location.href='/api/multiasset/ledger.csv'">Descargar ledger v2.4</button><button class="button" onclick="location.href='/api/multiasset/journal'">Journal raw v2.2+</button></div>
@@ -85,6 +101,25 @@ setInterval(refreshV23,2000);refreshV23();
 DASHBOARD_HTML = DASHBOARD_HTML.replace("</style>", "</style>" + _V23_STYLE, 1)
 DASHBOARD_HTML = DASHBOARD_HTML.replace('<div class="footer">', _V23_HTML + '<div class="footer">', 1)
 DASHBOARD_HTML = DASHBOARD_HTML.replace("</body></html>", _V23_JS + "</body></html>", 1)
+DASHBOARD_HTML = DASHBOARD_HTML.replace("</body></html>", r'''
+<script>
+async function refreshEarly(){
+ try{
+  const r=await fetch('/api/early/metrics',{cache:'no-store'}),j=await r.json(),t=j.totals||{};
+  const f=(x,d=1)=>x==null?'—':Number(x).toFixed(d);
+  document.getElementById('earlyRecorded').textContent=t.recorded??0;
+  document.getElementById('earlyHit').textContent=t.hit_pct==null?'—':f(t.hit_pct,1)+'%';
+  document.getElementById('earlyAsk').textContent=t.avg_ask_cents==null?'—':f(t.avg_ask_cents,1)+'¢';
+  let p=t.net_pnl_dollars;document.getElementById('earlyPnl').textContent=p==null?'—':((p>=0?'+':'')+'$'+f(p,2));
+  document.getElementById('earlyPnl').className='v23-kpi '+(p>0?'v23-good':p<0?'v23-bad':'');
+  document.getElementById('earlyFollow').textContent=t.main_followthrough_pct==null?'—':f(t.main_followthrough_pct,1)+'%';
+  let mm={};(j.by_minute||[]).forEach(x=>mm[x.minute]=x);for(const m of [6,7]){let x=mm[m]||{};document.getElementById('earlyM'+m).textContent=`${x.recorded||0} / ${x.hit_pct==null?'—':f(x.hit_pct,0)+'%'} / ${x.avg_ask_cents==null?'—':f(x.avg_ask_cents,0)+'¢'}`}
+  document.getElementById('earlyMetrics').innerHTML=(j.by_asset||[]).map(x=>`<tr><td><b>${x.asset}</b></td><td>≥${f(x.early_threshold_bp,0)}bp</td><td>${x.recorded}</td><td>${x.hit_pct==null?'—':f(x.hit_pct,1)+'%'}</td><td>${x.avg_ask_cents==null?'—':f(x.avg_ask_cents,1)+'¢'}</td><td>${(x.net_pnl_dollars>=0?'+':'')+'$'+f(x.net_pnl_dollars,2)}</td><td>${x.main_followthrough_pct==null?'—':f(x.main_followthrough_pct,1)+'%'}</td></tr>`).join('');
+ }catch(e){console.log('early lab dashboard',e)}
+}
+setInterval(refreshEarly,2500);refreshEarly();
+</script>
+''' + "</body></html>", 1)
 
 # Railway exposes RAILWAY_VOLUME_MOUNT_PATH automatically when a volume exists.
 # Local fallback keeps data inside ./data.
@@ -96,7 +131,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.4.2-railway-rollover-aware-watchdog"
+APP_VERSION = "2.5-railway-early-entry-lab"
 
 
 def load_json(path):
@@ -725,6 +760,11 @@ class Monitor:
                 else:
                     now=datetime.now(timezone.utc);s=self.compute(self.fetch_binance(),self.fetch_kalshi(now))
                     s=self.apply_first_signal_guard(s)
+                    try:
+                        _alt=globals().get("ALT_MONITOR")
+                        if _alt and getattr(_alt,"early",None):_alt.early.observe_btc_state(s)
+                    except Exception as _ee:
+                        print("early BTC observe:",_ee,flush=True)
                 with self.lock:self.state=s
                 self.maybe_alert(s)
             except Exception as e:
@@ -770,6 +810,7 @@ class AltShadowMonitor:
         self.startup_sent = False
         self.ensure_journal()
         self.ledger = ShadowLedger(self)
+        self.early = EarlyEntryLab(self)
 
     def ensure_journal(self):
         if ALT_JOURNAL_PATH.exists():
@@ -946,9 +987,10 @@ class AltShadowMonitor:
         if self.startup_sent:
             return
         self.startup_sent=True
-        lines=["Multiasset EXECUTION LAB v2.4.2 ✅",
-               "ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
-               "Fees + orderbook depth + benchmark audit + portfolio shadow + promotion gates.",
+        lines=["Multiasset EXECUTION LAB v2.5 ✅",
+               "MAIN: ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
+               "EARLY LAB: M6-M7 · BTC ≥10bp · ETH/SOL ≥25bp · XRP ≥35bp · DOGE ≥30bp · BNB ≥15bp",
+               "Early Lab es experimental: captura precio antes; NO es señal operativa.",
                "BTC sigue igual. HYPE excluido. Sin órdenes automáticas."]
         post_telegram(telegram_token(), telegram_chat_id(self.primary.config), "\n".join(lines))
 
@@ -963,7 +1005,13 @@ class AltShadowMonitor:
                     break
                 try:
                     now=datetime.now(timezone.utc)
-                    s=self.compute(asset,model,self.fetch_binance(model["symbol"]),self.fetch_kalshi(asset,model["series"],now))
+                    _klines=self.fetch_binance(model["symbol"])
+                    _market=self.fetch_kalshi(asset,model["series"],now)
+                    s=self.compute(asset,model,_klines,_market)
+                    try:
+                        self.early.observe(asset,_klines,_market)
+                    except Exception as _ee:
+                        print("early lab observe:",_ee,flush=True)
                 except Exception as e:
                     s={"updated_at":datetime.now(timezone.utc).isoformat(),"asset":asset,"status":"API ERROR","api_error":str(e)}
                 # Match the historical protocol: only the first qualifying pullback per 15m candle counts.
@@ -979,6 +1027,10 @@ class AltShadowMonitor:
                         s["detail"]=f"First qualifying setup for this candle was already counted at M{prev.get('minute')}."
                     elif not prev or prev.get("window")!=s.get("window_start_utc"):
                         self.first_signal[asset]={"window":s.get("window_start_utc"),"minute":s.get("last_completed_minute"),"side":s.get("side")}
+                try:
+                    self.early.observe_main_state(s)
+                except Exception as _ee:
+                    print("early lab main followthrough:",_ee,flush=True)
                 with self.lock:
                     self.states[asset]=s
                 self.journal_if_confirmed(s)
@@ -992,7 +1044,259 @@ class AltShadowMonitor:
                 self.ledger.maybe_resolve()
             except Exception as e:
                 print("shadow ledger resolver:",e,flush=True)
+            try:
+                self.early.maybe_resolve()
+                self.early.maybe_daily_report()
+            except Exception as e:
+                print("early lab resolver:",e,flush=True)
             time.sleep(max(1.0,float(os.getenv("ALT_POLL_SECONDS","2.0"))))
+
+
+EARLY_LAB_MODELS = {
+    "BTC":  {"min_bp":10.0, "main_bp":10.0},
+    # Exploratory thresholds only. They intentionally sit one step below the main
+    # Execution Lab thresholds. No historical fair is assigned to these signals.
+    "ETH":  {"min_bp":25.0, "main_bp":30.0},
+    "SOL":  {"min_bp":25.0, "main_bp":30.0},
+    "XRP":  {"min_bp":35.0, "main_bp":40.0},
+    "DOGE": {"min_bp":30.0, "main_bp":35.0},
+    "BNB":  {"min_bp":15.0, "main_bp":20.0},
+}
+EARLY_LEDGER_PATH = DATA_DIR / "early_entry_lab_v25.json"
+EARLY_LEDGER_CSV_NAME = "early_entry_lab_v25.csv"
+
+
+class EarlyEntryLab:
+    """Exploratory M6-M7 price-discovery forward test.
+
+    This deliberately does NOT inherit the main model's historical fair. It asks a
+    narrower empirical question: when an early pullback precursor appears, what price
+    is Kalshi offering, what ultimately settles, and does the stricter M7-M10 main
+    setup appear later in the same candle?
+
+    Every eligible observation is simulated as exactly one contract at the observed
+    ask (plus the fee model) for research accounting only. No order is ever placed.
+    """
+    def __init__(self, alt_monitor):
+        self.alt=alt_monitor
+        self.lock=threading.Lock()
+        self.last_resolve_check=0.0
+        self.data={"version":"2.5","experiments":{},"last_daily_report_date":"","created_at":datetime.now(timezone.utc).isoformat()}
+        if EARLY_LEDGER_PATH.exists():
+            try:
+                old=load_json(EARLY_LEDGER_PATH)
+                if isinstance(old,dict):
+                    self.data.update(old);self.data.setdefault("experiments",{});self.data.setdefault("last_daily_report_date","")
+            except Exception as e:
+                print("early ledger load:",e,flush=True)
+        self.save()
+
+    def save(self):
+        with self.lock: save_json(EARLY_LEDGER_PATH,self.data)
+
+    @staticmethod
+    def _window_rows(klines,now_ms):
+        ws=(now_ms//900000)*900000;we=ws+900000;rows=[]
+        for k in klines or []:
+            try:
+                ot=int(k[0]);op=float(k[1]);cl=float(k[4]);ct=int(k[6])
+                if ws<=ot<we:rows.append({"open_time":ot,"open":op,"close":cl,"close_time":ct})
+            except Exception:pass
+        rows.sort(key=lambda r:r["open_time"])
+        return ws,we,rows
+
+    def observe(self,asset,klines,market):
+        cfg=EARLY_LAB_MODELS.get(asset)
+        if not cfg:return None
+        now=datetime.now(timezone.utc);now_ms=int(now.timestamp()*1000)
+        ws,we,rows=self._window_rows(klines,now_ms)
+        if not rows:return None
+        completed=[r for r in rows if r["close_time"]<now_ms]
+        m=len(completed)
+        if m not in (6,7) or len(completed)<2:return None
+        model_open=rows[0]["open"];last=completed[-1]["close"];prev=completed[-2]["close"]
+        side="UP" if last>model_open else ("DOWN" if last<model_open else "—")
+        if side=="—":return None
+        dist=abs(bp(last,model_open));step=bp(last,prev)
+        pullback=(side=="UP" and step<0) or (side=="DOWN" and step>0)
+        if not pullback or dist<float(cfg["min_bp"]):return None
+        window_iso=datetime.fromtimestamp(ws/1000,tz=timezone.utc).isoformat()
+        eid=f"{asset}|{window_iso}"
+        with self.lock:
+            if eid in self.data.get("experiments",{}):return dict(self.data["experiments"][eid])
+
+        ticker="";target=None;yb=ya=nb=na=None
+        if market:
+            ticker=market.get("ticker","");target=extract_target(market);yb,ya,nb,na=get_price_fields(market)
+        ask=ya*100 if side=="UP" and ya is not None else (na*100 if side=="DOWN" and na is not None else None)
+        bid=yb*100 if side=="UP" and yb is not None else (nb*100 if side=="DOWN" and nb is not None else None)
+        spread=(ask-bid) if ask is not None and bid is not None else None
+        target_gap=bp(target,model_open) if target else None
+        target_side=("UP" if last>target else "DOWN") if target and last is not None else "—"
+        max_basis=float(self.alt.primary.config.get("max_basis_gap_bp",8.0))
+        basis_ok=bool(target is not None and target_gap is not None and abs(target_gap)<=max_basis and target_side==side)
+        fee=effective_fee_cents(ask,self.alt.primary.config,1.0) if ask is not None else None
+        simulated=bool(basis_ok and ask is not None and 0<float(ask)<100)
+        rec={
+            "experiment_id":eid,"recorded_at":now.isoformat(),"asset":asset,"window_start_utc":window_iso,"window_start_ms":ws,"window_end_ms":we,
+            "early_minute":m,"side":side,"model_open":model_open,"signal_binance_price":last,"distance_bp":dist,"last_step_bp":step,
+            "early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"],"market_ticker":ticker,"kalshi_target":target,"target_gap_bp":target_gap,
+            "basis_ok":basis_ok,"ask_cents":ask,"bid_cents":bid,"spread_cents":spread,"entry_simulated":simulated,"entry_ask_cents":ask if simulated else None,
+            "entry_fee_cents":fee if simulated else None,"main_followthrough":False,"main_followthrough_minute":None,"main_followthrough_side":"",
+            "resolved":False,"kalshi_status":"","kalshi_result":"","kalshi_win":None,"settlement_ts":"","underlying_final_close":None,"underlying_model_win":None,
+            "benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":""
+        }
+        with self.lock:
+            self.data["experiments"][eid]=rec;save_json(EARLY_LEDGER_PATH,self.data)
+        self.maybe_alert(rec)
+        return dict(rec)
+
+    def observe_btc_state(self,s):
+        cfg=EARLY_LAB_MODELS["BTC"]
+        try:m=int(s.last_completed_minute or 0)
+        except Exception:return None
+        # Record a broad BTC precursor cohort. We intentionally do not assign a fair
+        # to it; the experiment will later stratify by distance and ask price.
+        if m in (6,7) and s.side in ("UP","DOWN") and s.distance_bp is not None and s.last_step_bp is not None:
+            pullback=(s.side=="UP" and float(s.last_step_bp)<0) or (s.side=="DOWN" and float(s.last_step_bp)>0)
+            if pullback and float(s.distance_bp)>=cfg["min_bp"]:
+                dt=parse_iso(s.updated_at) or datetime.now(timezone.utc);ws_ms=(int(dt.timestamp()*1000)//900000)*900000;we_ms=ws_ms+900000
+                window_iso=datetime.fromtimestamp(ws_ms/1000,tz=timezone.utc).isoformat();eid=f"BTC|{window_iso}"
+                with self.lock:
+                    exists=eid in self.data.get("experiments",{})
+                if not exists:
+                    ask=s.selected_ask_cents;bid=(s.yes_bid_cents if s.side=="UP" else s.no_bid_cents);spread=(float(ask)-float(bid)) if ask is not None and bid is not None else None
+                    fee=effective_fee_cents(ask,self.alt.primary.config,1.0) if ask is not None else None
+                    simulated=bool(s.basis_ok is True and ask is not None and 0<float(ask)<100)
+                    rec={"experiment_id":eid,"recorded_at":s.updated_at,"asset":"BTC","window_start_utc":window_iso,"window_start_ms":ws_ms,"window_end_ms":we_ms,
+                         "early_minute":m,"side":s.side,"model_open":s.model_open,"signal_binance_price":s.btc_price,"distance_bp":s.distance_bp,"last_step_bp":s.last_step_bp,
+                         "early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"],"market_ticker":s.market_ticker,"kalshi_target":s.kalshi_target,"target_gap_bp":s.target_gap_bp,
+                         "basis_ok":bool(s.basis_ok),"ask_cents":ask,"bid_cents":bid,"spread_cents":spread,"entry_simulated":simulated,"entry_ask_cents":ask if simulated else None,"entry_fee_cents":fee if simulated else None,
+                         "main_followthrough":False,"main_followthrough_minute":None,"main_followthrough_side":"","resolved":False,"kalshi_status":"","kalshi_result":"","kalshi_win":None,"settlement_ts":"",
+                         "underlying_final_close":None,"underlying_model_win":None,"benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":""}
+                    with self.lock:self.data["experiments"][eid]=rec;save_json(EARLY_LEDGER_PATH,self.data)
+                    self.maybe_alert(rec)
+        # Record whether the later evidence-aligned BTC setup appeared.
+        if s.status in ("CONFIRMED","ENTRY ZONE","READY / PRICE HIGH","BASIS WARNING","ALREADY COUNTED") and m in (7,8,9,10):
+            dt=parse_iso(s.updated_at) or datetime.now(timezone.utc);ws_ms=(int(dt.timestamp()*1000)//900000)*900000;eid=f"BTC|{datetime.fromtimestamp(ws_ms/1000,tz=timezone.utc).isoformat()}"
+            with self.lock:
+                r=self.data.get("experiments",{}).get(eid)
+                if r and not r.get("main_followthrough"):
+                    r["main_followthrough"]=True;r["main_followthrough_minute"]=m;r["main_followthrough_side"]=s.side;save_json(EARLY_LEDGER_PATH,self.data)
+        return None
+
+    def observe_main_state(self,s):
+        if s.get("status") not in ("SHADOW CONFIRMED","SHADOW ENTRY ZONE","SHADOW PRICE HIGH","BASIS WARNING","SHADOW ALREADY COUNTED"):return
+        eid=f"{s.get('asset')}|{s.get('window_start_utc')}"
+        changed=False
+        with self.lock:
+            r=self.data.get("experiments",{}).get(eid)
+            if not r:return
+            if not r.get("main_followthrough") and s.get("last_completed_minute") in (7,8,9,10):
+                r["main_followthrough"]=True;r["main_followthrough_minute"]=s.get("last_completed_minute");r["main_followthrough_side"]=s.get("side");changed=True
+            if changed:save_json(EARLY_LEDGER_PATH,self.data)
+
+    def maybe_alert(self,rec):
+        if os.getenv("EARLY_LAB_ALERTS","1").lower() not in ("1","true","yes"):return
+        ask=rec.get("ask_cents")
+        maxask=float(os.getenv("EARLY_LAB_TELEGRAM_MAX_ASK","90"))
+        if ask is None or float(ask)>maxask or rec.get("basis_ok") is not True:return
+        text=(f"{rec['asset']}15M EARLY LAB CAPTURE · {rec['side']}\n"
+              f"M{rec['early_minute']} · {rec['distance_bp']:.1f}bp · exploratory threshold {rec['early_threshold_bp']:.0f}bp\n"
+              f"Kalshi ask {float(ask):.1f}c · spread {float(rec.get('spread_cents') or 0):.1f}c\n"
+              f"EXPERIMENTAL · NO ENTRY · 1-contract shadow only")
+        post_telegram(telegram_token(),telegram_chat_id(self.alt.primary.config),text)
+
+    def maybe_resolve(self):
+        interval=max(10.0,float(os.getenv("EARLY_RESOLVE_SECONDS","20")))
+        if time.time()-self.last_resolve_check<interval:return
+        self.last_resolve_check=time.time();now_ms=int(time.time()*1000);changed=False
+        with self.lock:
+            ids=[k for k,r in self.data.get("experiments",{}).items() if not r.get("resolved") and r.get("window_end_ms") and now_ms>r["window_end_ms"]+15000]
+        for eid in ids[:20]:
+            with self.lock: rec=dict(self.data["experiments"].get(eid,{}) or {})
+            if not rec:continue
+            try:
+                done=self.alt.ledger._resolve_one(rec)
+                if rec.get("asset")=="BTC" and rec.get("underlying_final_close") is None:
+                    try:
+                        start=rec.get("window_start_ms")
+                        url=BINANCE_BASE+"/api/v3/klines?"+urlencode({"symbol":"BTCUSDT","interval":"1m","startTime":start,"endTime":start+899999,"limit":15})
+                        _rows=http_json(url);_cl=sorted((int(k[0]),float(k[4])) for k in (_rows or []) if start<=int(k[0])<start+900000)
+                        if len(_cl)>=15:
+                            rec["underlying_final_close"]=_cl[-1][1];_ms="UP" if _cl[-1][1]>float(rec.get("model_open")) else ("DOWN" if _cl[-1][1]<float(rec.get("model_open")) else "TIE")
+                            rec["underlying_model_win"]=( _ms==rec.get("side") )
+                            if rec.get("kalshi_win") is not None:rec["benchmark_disagreement"]=(bool(rec.get("underlying_model_win"))!=bool(rec.get("kalshi_win")))
+                    except Exception:pass
+                rec["resolution_error"]=""
+                with self.lock:self.data["experiments"][eid]=rec
+                changed=True
+            except Exception as e:
+                rec["resolution_error"]=str(e)[:300]
+                with self.lock:self.data["experiments"][eid]=rec
+                changed=True
+            time.sleep(0.05)
+        if changed:self.save()
+
+    @staticmethod
+    def _cohort(rows):
+        resolved=[r for r in rows if r.get("resolved") and r.get("kalshi_win") is not None]
+        quoted=[r for r in rows if r.get("entry_simulated") and r.get("entry_ask_cents") is not None]
+        sim=[r for r in resolved if r.get("entry_simulated") and r.get("entry_ask_cents") is not None]
+        wins=sum(1 for r in sim if r.get("kalshi_win"))
+        pnl=sum(float(r.get("net_pnl_cents") or 0) for r in sim)/100.0
+        avgask=(sum(float(r.get("entry_ask_cents")) for r in quoted)/len(quoted)) if quoted else None
+        # Follow-through is only evaluated after settlement so fresh captures are not
+        # temporarily counted as failures before M7-M10 has had a chance to occur.
+        fcount=sum(1 for r in resolved if r.get("main_followthrough"))
+        bench=[r for r in resolved if r.get("benchmark_disagreement") is not None]
+        return {"recorded":len(rows),"resolved":len(resolved),"simulated_entries":len(quoted),"resolved_entries":len(sim),"wins":wins,"losses":len(sim)-wins,
+                "hit_pct":(100*wins/len(sim) if sim else None),"net_pnl_dollars":pnl,"avg_net_pnl_per_entry_dollars":(pnl/len(sim) if sim else None),
+                "avg_ask_cents":avgask,"main_followthrough_pct":(100*fcount/len(resolved) if resolved else None),
+                "benchmark_disagreement_pct":(100*sum(1 for r in bench if r.get('benchmark_disagreement'))/len(bench) if bench else None)}
+
+    def metrics(self):
+        with self.lock: rows=[dict(r) for r in self.data.get("experiments",{}).values()]
+        by=[]
+        for asset,cfg in EARLY_LAB_MODELS.items():
+            aa=[r for r in rows if r.get("asset")==asset];x=self._cohort(aa);x.update({"asset":asset,"early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"]})
+            by.append(x)
+        minute=[]
+        for m in (6,7):
+            mm=[r for r in rows if r.get("early_minute")==m];x=self._cohort(mm);x["minute"]=m;minute.append(x)
+        bands=[]
+        for cap in (70,75,80,85,90,95,99):
+            rr=[r for r in rows if r.get("entry_ask_cents") is not None and float(r.get("entry_ask_cents"))<=cap];x=self._cohort(rr);x["max_ask_cents"]=cap;bands.append(x)
+        return {"version":APP_VERSION,"mode":"early-entry-exploratory","generated_at":datetime.now(timezone.utc).isoformat(),
+                "rule":"first qualifying completed M6 or M7 pullback per asset/window; relaxed threshold; no historical fair assigned",
+                "totals":self._cohort(rows),"by_asset":by,"by_minute":minute,"price_bands":bands}
+
+    def csv_bytes(self):
+        import io
+        fields=["experiment_id","recorded_at","asset","window_start_utc","early_minute","side","model_open","signal_binance_price","distance_bp","last_step_bp","early_threshold_bp","main_threshold_bp",
+                "market_ticker","kalshi_target","target_gap_bp","basis_ok","ask_cents","bid_cents","spread_cents","entry_simulated","entry_ask_cents","entry_fee_cents","main_followthrough","main_followthrough_minute","main_followthrough_side",
+                "resolved","kalshi_status","kalshi_result","kalshi_win","settlement_ts","underlying_final_close","underlying_model_win","benchmark_disagreement","gross_pnl_cents","net_pnl_cents","resolution_error"]
+        buf=io.StringIO();w=csv.DictWriter(buf,fieldnames=fields,extrasaction="ignore");w.writeheader()
+        with self.lock: vals=sorted(self.data.get("experiments",{}).values(),key=lambda r:r.get("recorded_at") or "")
+        for r in vals:w.writerow(r)
+        return buf.getvalue().encode("utf-8")
+
+    def maybe_daily_report(self):
+        now=datetime.now(timezone.utc);h=int(os.getenv("EARLY_DAILY_REPORT_UTC_HOUR","23"));m=int(os.getenv("EARLY_DAILY_REPORT_UTC_MINUTE","57"));today=now.date().isoformat()
+        with self.lock:last=self.data.get("last_daily_report_date","")
+        if not (now.hour>h or (now.hour==h and now.minute>=m)) or last==today:return
+        with self.lock: day=[dict(r) for r in self.data.get("experiments",{}).values() if str(r.get("recorded_at") or "").startswith(today)]
+        x=self._cohort(day)
+        hit_txt="—" if x.get("hit_pct") is None else f"{x['hit_pct']:.1f}%"
+        ask_txt="—" if x.get("avg_ask_cents") is None else f"{x['avg_ask_cents']:.1f}c"
+        follow_txt="—" if x.get("main_followthrough_pct") is None else f"{x['main_followthrough_pct']:.1f}%"
+        text=(f"EARLY ENTRY LAB DAILY · {today} UTC\n"
+              f"Captures {x['recorded']} · resolved {x['resolved']} · hit {hit_txt}\n"
+              f"Avg ask {ask_txt} · net 1-contract {x['net_pnl_dollars']:+.2f}$\n"
+              f"Main follow-through {follow_txt}\n"
+              f"Exploratory only · no orders")
+        post_telegram(telegram_token(),telegram_chat_id(self.alt.primary.config),text)
+        with self.lock:self.data["last_daily_report_date"]=today;save_json(EARLY_LEDGER_PATH,self.data)
 
 
 ALT_MONITOR=None
@@ -1669,7 +1973,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "multiasset_mode":"shadow" if ALT_MONITOR else "off","shadow_resolved_setups":met.get("resolved_setups"),
                                        "shadow_resolved_entries":met.get("resolved_entries"),"shadow_pending_setups":met.get("pending_setups"),
                                        "shadow_net_pnl_dollars":met.get("entry_net_pnl_dollars"),"portfolio_shadow_entries":met.get("portfolio_entries"),
-                                       "portfolio_shadow_net_pnl_dollars":met.get("portfolio_net_pnl_dollars")}))
+                                       "portfolio_shadow_net_pnl_dollars":met.get("portfolio_net_pnl_dollars"),
+                                       "early_lab_recorded":(ALT_MONITOR.early.metrics().get("totals",{}).get("recorded") if ALT_MONITOR else 0),
+                                       "early_lab_resolved":(ALT_MONITOR.early.metrics().get("totals",{}).get("resolved") if ALT_MONITOR else 0),
+                                       "early_lab_net_pnl_dollars":(ALT_MONITOR.early.metrics().get("totals",{}).get("net_pnl_dollars") if ALT_MONITOR else 0.0)}))
         elif path=="/":
             self._send(200,DASHBOARD_HTML,"text/html; charset=utf-8")
         elif path=="/api/state":
@@ -1688,6 +1995,13 @@ class Handler(BaseHTTPRequestHandler):
             else:self._send(404,b"","text/plain")
         elif path=="/api/multiasset/journal":
             if ALT_JOURNAL_PATH.exists():self._send(200,ALT_JOURNAL_PATH.read_bytes(),"text/csv; charset=utf-8",{"Content-Disposition":"attachment; filename=multiasset_shadow_journal.csv"})
+            else:self._send(404,b"","text/plain")
+        elif path=="/api/early":
+            self._send(200,json.dumps(ALT_MONITOR.early.metrics() if ALT_MONITOR else {"error":"early lab off"}))
+        elif path=="/api/early/metrics":
+            self._send(200,json.dumps(ALT_MONITOR.early.metrics() if ALT_MONITOR else {"error":"early lab off"}))
+        elif path=="/api/early/ledger.csv":
+            if ALT_MONITOR:self._send(200,ALT_MONITOR.early.csv_bytes(),"text/csv; charset=utf-8",{"Content-Disposition":f"attachment; filename={EARLY_LEDGER_CSV_NAME}"})
             else:self._send(404,b"","text/plain")
         elif path=="/api/research/status":
             self._send(200,json.dumps(RESEARCH.public_status()))
