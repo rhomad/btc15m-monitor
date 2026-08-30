@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import base64
 import csv
+import hashlib
 import json
 import math
 import os
@@ -63,6 +64,12 @@ _V23_HTML = r"""
  <div class="card"><div class="label">M7</div><div class="v23-kpi" id="earlyM7">—</div><div class="small">n / hit / avg ask</div></div>
  <div class="card"><div class="label">Objetivo</div><div class="v23-kpi">≤90¢</div><div class="small">Telegram avisa solo captures baratos; NO ENTRY</div></div>
 </div>
+<div class="grid" style="margin-top:12px">
+ <div class="card"><div class="label">Data quality VALID</div><div class="v23-kpi" id="earlyValid">0</div><div class="small">capturas v2.6 con fuentes sanas</div></div>
+ <div class="card"><div class="label">Captures rechazados</div><div class="v23-kpi" id="earlyRejected">0</div><div class="small">fail-closed · razón en /health</div></div>
+ <div class="card"><div class="label">Wilson 95% low</div><div class="v23-kpi" id="earlyWilson">—</div><div class="small">entries resueltas; no es fair</div></div>
+ <div class="card"><div class="label">Quality mix</div><div class="v23-kpi" id="earlyQualityMix">—</div><div class="small">V valid · D degraded · L legacy</div></div>
+</div>
 <div class="card" style="overflow:auto;margin-top:12px"><table class="v23-table"><thead><tr><th>Activo</th><th>Early th.</th><th>Captures</th><th>Hit</th><th>Avg ask</th><th>Net PnL</th><th>Follow-through</th></tr></thead><tbody id="earlyMetrics"></tbody></table></div>
 <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="button" onclick="location.href='/api/early/ledger.csv'">Descargar Early Lab CSV</button></div>
 <div class="section">Calibración por activo</div>
@@ -113,6 +120,11 @@ async function refreshEarly(){
   let p=t.net_pnl_dollars;document.getElementById('earlyPnl').textContent=p==null?'—':((p>=0?'+':'')+'$'+f(p,2));
   document.getElementById('earlyPnl').className='v23-kpi '+(p>0?'v23-good':p<0?'v23-bad':'');
   document.getElementById('earlyFollow').textContent=t.main_followthrough_pct==null?'—':f(t.main_followthrough_pct,1)+'%';
+  const op=j.operational||{},qc=t.quality_counts||{};
+  document.getElementById('earlyValid').textContent=qc.VALID||0;
+  document.getElementById('earlyRejected').textContent=op.captures_rejected||0;
+  document.getElementById('earlyWilson').textContent=t.wilson_low_pct==null?'—':f(t.wilson_low_pct,1)+'%';
+  document.getElementById('earlyQualityMix').textContent=`${qc.VALID||0}V / ${qc.DEGRADED_OBSERVATION||0}D / ${qc.LEGACY_UNASSESSED||0}L`;
   let mm={};(j.by_minute||[]).forEach(x=>mm[x.minute]=x);for(const m of [6,7]){let x=mm[m]||{};document.getElementById('earlyM'+m).textContent=`${x.recorded||0} / ${x.hit_pct==null?'—':f(x.hit_pct,0)+'%'} / ${x.avg_ask_cents==null?'—':f(x.avg_ask_cents,0)+'¢'}`}
   document.getElementById('earlyMetrics').innerHTML=(j.by_asset||[]).map(x=>`<tr><td><b>${x.asset}</b></td><td>≥${f(x.early_threshold_bp,0)}bp</td><td>${x.recorded}</td><td>${x.hit_pct==null?'—':f(x.hit_pct,1)+'%'}</td><td>${x.avg_ask_cents==null?'—':f(x.avg_ask_cents,1)+'¢'}</td><td>${(x.net_pnl_dollars>=0?'+':'')+'$'+f(x.net_pnl_dollars,2)}</td><td>${x.main_followthrough_pct==null?'—':f(x.main_followthrough_pct,1)+'%'}</td></tr>`).join('');
  }catch(e){console.log('early lab dashboard',e)}
@@ -131,7 +143,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.5-railway-early-entry-lab"
+APP_VERSION = "2.6-railway-hardening"
 
 
 def load_json(path):
@@ -139,12 +151,40 @@ def load_json(path):
         return json.load(f)
 
 
+_SAVE_JSON_LOCK = threading.RLock()
+
+
 def save_json(path, data):
+    """Crash-safer JSON persistence shared by every ledger/config writer.
+
+    A single process-wide lock prevents two threads from racing on the same
+    temporary path. Data is flushed and fsynced before the atomic replace.
+    """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = str(path) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
+    with _SAVE_JSON_LOCK:
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            # Persist the directory entry as well when the platform supports it.
+            try:
+                dfd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except Exception:
+                pass
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
 
 
 def env_num(name, default, caster=float):
@@ -577,9 +617,15 @@ class Monitor:
         rows=sorted(rows,key=lambda r:r["open_time"])
         if not rows:
             raise ValueError("Current 15m window not present in Binance klines")
+        expected_times=[window_start_ms+i*60000 for i in range(len(rows))]
+        actual_times=[r["open_time"] for r in rows]
+        if actual_times!=expected_times:
+            raise ValueError("Incomplete/non-contiguous Binance 1m sequence; fail-closed")
         model_open=rows[0]["open"]
         btc_price=rows[-1]["close"]
         completed=[r for r in rows if r["close_time"] < now_ms]
+        if completed and now_ms-int(completed[-1]["close_time"])>int(float(os.getenv("MAX_BINANCE_COMPLETED_AGE_MS","90000"))):
+            raise ValueError("Stale Binance completed candle; fail-closed")
         last_completed_minute=len(completed)
         last_close=completed[-1]["close"] if completed else None
         prev_close=completed[-2]["close"] if len(completed)>=2 else None
@@ -874,9 +920,15 @@ class AltShadowMonitor:
         rows.sort(key=lambda r:r["open_time"])
         if not rows:
             raise ValueError("current 15m window missing")
+        expected_times=[window_start_ms+i*60000 for i in range(len(rows))]
+        actual_times=[r["open_time"] for r in rows]
+        if actual_times!=expected_times:
+            raise ValueError("incomplete/non-contiguous Binance 1m sequence; fail-closed")
         model_open = rows[0]["open"]
         live_price = rows[-1]["close"]
         completed = [r for r in rows if r["close_time"] < now_ms]
+        if completed and now_ms-int(completed[-1]["close_time"])>int(float(os.getenv("MAX_BINANCE_COMPLETED_AGE_MS","90000"))):
+            raise ValueError("stale Binance completed candle; fail-closed")
         last_completed_minute = len(completed)
         last_close = completed[-1]["close"] if completed else None
         prev_close = completed[-2]["close"] if len(completed)>=2 else None
@@ -987,7 +1039,7 @@ class AltShadowMonitor:
         if self.startup_sent:
             return
         self.startup_sent=True
-        lines=["Multiasset EXECUTION LAB v2.5 ✅",
+        lines=["Multiasset EXECUTION LAB v2.6 HARDENING ✅",
                "MAIN: ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
                "EARLY LAB: M6-M7 · BTC ≥10bp · ETH/SOL ≥25bp · XRP ≥35bp · DOGE ≥30bp · BNB ≥15bp",
                "Early Lab es experimental: captura precio antes; NO es señal operativa.",
@@ -1064,6 +1116,13 @@ EARLY_LAB_MODELS = {
 }
 EARLY_LEDGER_PATH = DATA_DIR / "early_entry_lab_v25.json"
 EARLY_LEDGER_CSV_NAME = "early_entry_lab_v25.csv"
+EARLY_LEDGER_SCHEMA_VERSION = "2.6"
+EARLY_EXPERIMENT_RULE = "early_m6_m7"
+
+
+def deterministic_capture_id(asset, window_start_utc, minute, side, rule=EARLY_EXPERIMENT_RULE):
+    raw = f"{asset}|{window_start_utc}|{minute}|{side}|{rule}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 class EarlyEntryLab:
@@ -1079,20 +1138,213 @@ class EarlyEntryLab:
     """
     def __init__(self, alt_monitor):
         self.alt=alt_monitor
-        self.lock=threading.Lock()
+        self.lock=threading.RLock()
         self.last_resolve_check=0.0
-        self.data={"version":"2.5","experiments":{},"last_daily_report_date":"","created_at":datetime.now(timezone.utc).isoformat()}
+        now_iso=datetime.now(timezone.utc).isoformat()
+        self.data={
+            "version":EARLY_LEDGER_SCHEMA_VERSION,
+            "schema_version":EARLY_LEDGER_SCHEMA_VERSION,
+            "mode":"early-entry-exploratory",
+            "experiments":{},
+            "rejected_candidates":{},
+            "counters":{
+                "captures_received":0,
+                "captures_persisted":0,
+                "captures_rejected":0,
+                "duplicates_suppressed":0,
+                "persistence_errors":0,
+            },
+            "rejections":{
+                "stale_binance":0,
+                "stale_kalshi_book":0,
+                "missing_book":0,
+                "missing_bid_or_ask":0,
+                "incomplete_minute_data":0,
+                "basis_invalid":0,
+                "duplicate_capture":0,
+                "settlement_unresolved":0,
+                "other":0,
+            },
+            "last_capture_utc":None,
+            "last_resolution_utc":None,
+            "last_persist_utc":None,
+            "last_daily_report_date":"",
+            "created_at":now_iso,
+        }
         if EARLY_LEDGER_PATH.exists():
             try:
                 old=load_json(EARLY_LEDGER_PATH)
                 if isinstance(old,dict):
-                    self.data.update(old);self.data.setdefault("experiments",{});self.data.setdefault("last_daily_report_date","")
+                    if str(old.get("schema_version") or old.get("version") or "")!="2.6":
+                        backup_path=DATA_DIR/"early_entry_lab_v25.pre_v26.json"
+                        if not backup_path.exists():
+                            save_json(backup_path,old)
+                    had_counters=isinstance(old.get("counters"),dict)
+                    self.data.update(old)
+                    self.data.setdefault("experiments",{})
+                    self.data.setdefault("rejected_candidates",{})
+                    self.data.setdefault("last_daily_report_date","")
+                    self.data.setdefault("rejections",{})
+                    for key in ("stale_binance","stale_kalshi_book","missing_book","missing_bid_or_ask","incomplete_minute_data","basis_invalid","duplicate_capture","settlement_unresolved","other"):
+                        self.data["rejections"].setdefault(key,0)
+                    self.data.setdefault("counters",{})
+                    existing_count=len(self.data.get("experiments",{}))
+                    defaults={
+                        "captures_received":existing_count if not had_counters else 0,
+                        "captures_persisted":existing_count if not had_counters else 0,
+                        "captures_rejected":0,
+                        "duplicates_suppressed":0,
+                        "persistence_errors":0,
+                    }
+                    for key,value in defaults.items():
+                        self.data["counters"].setdefault(key,value)
             except Exception as e:
                 print("early ledger load:",e,flush=True)
+        self.data["version"]=EARLY_LEDGER_SCHEMA_VERSION
+        self.data["schema_version"]=EARLY_LEDGER_SCHEMA_VERSION
+        self.data["mode"]="early-entry-exploratory"
+        self.data.setdefault("last_capture_utc",None)
+        self.data.setdefault("last_resolution_utc",None)
+        self.data.setdefault("last_persist_utc",None)
+        # Non-destructive migration: v2.5 observations remain in the same file.
+        for rec in self.data.get("experiments",{}).values():
+            rec.setdefault("schema_version","2.5-legacy")
+            rec.setdefault("model_version","2.5-railway-early-entry-lab")
+            rec.setdefault("experimental_rule",EARLY_EXPERIMENT_RULE)
+            rec.setdefault("predicted_probability",None)
+            rec.setdefault("predicted_edge",None)
+            rec.setdefault("capture_id",deterministic_capture_id(
+                rec.get("asset",""),
+                rec.get("window_start_utc",""),
+                rec.get("early_minute"),
+                rec.get("side",""),
+            ))
+            rec.setdefault("data_quality",{
+                "status":"LEGACY_UNASSESSED",
+                "score":None,
+                "reasons":["quality vector not recorded before v2.6"],
+                "binance_age_ms":None,
+                "kalshi_book_age_ms":None,
+                "settlement_basis_ok":rec.get("basis_ok"),
+                "minute_closes_complete":None,
+                "gap_count":None,
+                "largest_gap_seconds":None,
+                "book_present":bool(rec.get("market_ticker")),
+                "bid_present":rec.get("bid_cents") is not None,
+                "ask_present":rec.get("ask_cents") is not None,
+                "spread_cents":rec.get("spread_cents"),
+                "source_errors_recent":None,
+                "reconnects_recent":None,
+            })
+            rec.setdefault("audit",{
+                "created_by_version":rec.get("model_version","2.5-railway-early-entry-lab"),
+                "last_updated_by_version":APP_VERSION,
+            })
+        if not self.data.get("last_capture_utc") and self.data.get("experiments"):
+            self.data["last_capture_utc"]=max((str(r.get("recorded_at") or "") for r in self.data["experiments"].values()),default=None) or None
         self.save()
 
     def save(self):
-        with self.lock: save_json(EARLY_LEDGER_PATH,self.data)
+        with self.lock:
+            self.data["last_persist_utc"]=datetime.now(timezone.utc).isoformat()
+            try:
+                save_json(EARLY_LEDGER_PATH,self.data)
+            except Exception:
+                self.data.setdefault("counters",{}).setdefault("persistence_errors",0)
+                self.data["counters"]["persistence_errors"]+=1
+                raise
+
+    def _inc_rejection(self, reason):
+        reason=reason if reason in self.data.get("rejections",{}) else "other"
+        self.data["rejections"][reason]=int(self.data["rejections"].get(reason,0))+1
+
+    def _record_invalid_candidate(self, capture_id, asset, window_iso, minute, side, reasons):
+        now_iso=datetime.now(timezone.utc).isoformat()
+        primary_reason=(reasons or ["other"])[0]
+        with self.lock:
+            rejected=self.data.setdefault("rejected_candidates",{})
+            if capture_id in rejected:
+                return
+            self.data["counters"]["captures_received"]+=1
+            self.data["counters"]["captures_rejected"]+=1
+            self._inc_rejection(primary_reason)
+            rejected[capture_id]={
+                "capture_id":capture_id,
+                "asset":asset,
+                "window_start_utc":window_iso,
+                "early_minute":minute,
+                "side":side,
+                "reasons":list(reasons or ["other"]),
+                "rejected_at":now_iso,
+            }
+            try:
+                self.save()
+            except Exception:
+                rejected.pop(capture_id,None)
+                self.data["counters"]["captures_received"]-=1
+                self.data["counters"]["captures_rejected"]-=1
+                self.data["rejections"][primary_reason]=max(0,int(self.data["rejections"].get(primary_reason,0))-1)
+                raise
+
+    def _data_quality(self, asset, ws, completed, minute, market, side, model_open, last, ask, bid, basis_ok):
+        reasons=[]
+        invalid=[]
+        gap_count=0
+        largest_gap=0
+        expected=[ws+i*60000 for i in range(minute)]
+        actual=[int(r["open_time"]) for r in completed[:minute]]
+        complete=(len(actual)==minute and actual==expected)
+        if not complete:
+            invalid.append("incomplete_minute_data")
+            if len(actual)>=2:
+                gaps=[max(0,int((actual[i+1]-actual[i])/1000)-60) for i in range(len(actual)-1)]
+                gap_count=sum(1 for g in gaps if g>0)
+                largest_gap=max(gaps,default=0)
+            elif len(actual)<minute:
+                gap_count=max(1,minute-len(actual))
+                largest_gap=None
+        now_ms=int(time.time()*1000)
+        binance_age=(max(0,now_ms-int(completed[-1]["close_time"])) if completed else None)
+        max_binance_age=int(float(os.getenv("EARLY_MAX_BINANCE_AGE_MS","90000")))
+        if binance_age is None or binance_age>max_binance_age:
+            invalid.append("stale_binance")
+        if asset=="BTC":
+            last_fetch=float(getattr(self.alt.primary,"kalshi_last",0.0) or 0.0)
+            poll=float(self.alt.primary.config.get("kalshi_poll_seconds",2.0))
+        else:
+            last_fetch=float(self.alt.kalshi_last.get(asset,0.0) or 0.0)
+            poll=float(os.getenv("ALT_KALSHI_POLL_SECONDS","3"))
+        kalshi_age=(max(0.0,(time.time()-last_fetch)*1000.0) if last_fetch else None)
+        default_kalshi_age=max(15000,int(poll*5000))
+        max_kalshi_age=int(float(os.getenv("EARLY_MAX_KALSHI_AGE_MS",str(default_kalshi_age))))
+        if kalshi_age is None or kalshi_age>max_kalshi_age:
+            reasons.append("stale_kalshi_book")
+        if not market or not market.get("ticker"):
+            reasons.append("missing_book")
+        if ask is None or bid is None:
+            reasons.append("missing_bid_or_ask")
+        if basis_ok is not True:
+            reasons.append("basis_invalid")
+        all_reasons=invalid+[r for r in reasons if r not in invalid]
+        status="INVALID" if invalid else ("DEGRADED_OBSERVATION" if reasons else "VALID")
+        score=0.0 if status=="INVALID" else (0.5 if status=="DEGRADED_OBSERVATION" else 1.0)
+        return {
+            "status":status,
+            "score":score,
+            "reasons":all_reasons,
+            "binance_age_ms":round(binance_age,1) if binance_age is not None else None,
+            "kalshi_book_age_ms":round(kalshi_age,1) if kalshi_age is not None else None,
+            "settlement_basis_ok":basis_ok,
+            "minute_closes_complete":complete,
+            "gap_count":gap_count,
+            "largest_gap_seconds":largest_gap,
+            "book_present":bool(market and market.get("ticker")),
+            "bid_present":bid is not None,
+            "ask_present":ask is not None,
+            "spread_cents":(ask-bid) if ask is not None and bid is not None else None,
+            "source_errors_recent":None,
+            "reconnects_recent":None,
+        }
 
     @staticmethod
     def _window_rows(klines,now_ms):
@@ -1120,10 +1372,14 @@ class EarlyEntryLab:
         dist=abs(bp(last,model_open));step=bp(last,prev)
         pullback=(side=="UP" and step<0) or (side=="DOWN" and step>0)
         if not pullback or dist<float(cfg["min_bp"]):return None
+
         window_iso=datetime.fromtimestamp(ws/1000,tz=timezone.utc).isoformat()
         eid=f"{asset}|{window_iso}"
+        capture_id=deterministic_capture_id(asset,window_iso,m,side)
         with self.lock:
-            if eid in self.data.get("experiments",{}):return dict(self.data["experiments"][eid])
+            existing=self.data.get("experiments",{}).get(eid)
+            if existing:
+                return dict(existing)
 
         ticker="";target=None;yb=ya=nb=na=None
         if market:
@@ -1135,19 +1391,50 @@ class EarlyEntryLab:
         target_side=("UP" if last>target else "DOWN") if target and last is not None else "—"
         max_basis=float(self.alt.primary.config.get("max_basis_gap_bp",8.0))
         basis_ok=bool(target is not None and target_gap is not None and abs(target_gap)<=max_basis and target_side==side)
+        dq=self._data_quality(asset,ws,completed,m,market,side,model_open,last,ask,bid,basis_ok)
+        if dq["status"]=="INVALID":
+            self._record_invalid_candidate(capture_id,asset,window_iso,m,side,dq.get("reasons") or ["other"])
+            return None
+
         fee=effective_fee_cents(ask,self.alt.primary.config,1.0) if ask is not None else None
-        simulated=bool(basis_ok and ask is not None and 0<float(ask)<100)
+        simulated=bool(dq["status"]=="VALID" and basis_ok and ask is not None and 0<float(ask)<100)
         rec={
-            "experiment_id":eid,"recorded_at":now.isoformat(),"asset":asset,"window_start_utc":window_iso,"window_start_ms":ws,"window_end_ms":we,
+            "schema_version":EARLY_LEDGER_SCHEMA_VERSION,
+            "capture_id":capture_id,
+            "experiment_id":eid,
+            "model_version":APP_VERSION,
+            "experimental_rule":EARLY_EXPERIMENT_RULE,
+            "predicted_probability":None,
+            "predicted_edge":None,
+            "recorded_at":now.isoformat(),"asset":asset,"window_start_utc":window_iso,"window_start_ms":ws,"window_end_ms":we,
             "early_minute":m,"side":side,"model_open":model_open,"signal_binance_price":last,"distance_bp":dist,"last_step_bp":step,
             "early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"],"market_ticker":ticker,"kalshi_target":target,"target_gap_bp":target_gap,
             "basis_ok":basis_ok,"ask_cents":ask,"bid_cents":bid,"spread_cents":spread,"entry_simulated":simulated,"entry_ask_cents":ask if simulated else None,
             "entry_fee_cents":fee if simulated else None,"main_followthrough":False,"main_followthrough_minute":None,"main_followthrough_side":"",
             "resolved":False,"kalshi_status":"","kalshi_result":"","kalshi_win":None,"settlement_ts":"","underlying_final_close":None,"underlying_model_win":None,
-            "benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":""
+            "benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":"",
+            "data_quality":dq,
+            "audit":{"created_by_version":APP_VERSION,"last_updated_by_version":APP_VERSION},
         }
         with self.lock:
-            self.data["experiments"][eid]=rec;save_json(EARLY_LEDGER_PATH,self.data)
+            # Re-check after quality computation so concurrent observers remain idempotent.
+            if eid in self.data.get("experiments",{}):
+                self.data["counters"]["duplicates_suppressed"]+=1
+                self.data["rejections"]["duplicate_capture"]+=1
+                return dict(self.data["experiments"][eid])
+            old_last_capture=self.data.get("last_capture_utc")
+            self.data["counters"]["captures_received"]+=1
+            self.data["experiments"][eid]=rec
+            self.data["counters"]["captures_persisted"]+=1
+            self.data["last_capture_utc"]=rec["recorded_at"]
+            try:
+                self.save()
+            except Exception:
+                self.data["experiments"].pop(eid,None)
+                self.data["counters"]["captures_received"]-=1
+                self.data["counters"]["captures_persisted"]-=1
+                self.data["last_capture_utc"]=old_last_capture
+                raise
         self.maybe_alert(rec)
         return dict(rec)
 
@@ -1155,34 +1442,99 @@ class EarlyEntryLab:
         cfg=EARLY_LAB_MODELS["BTC"]
         try:m=int(s.last_completed_minute or 0)
         except Exception:return None
-        # Record a broad BTC precursor cohort. We intentionally do not assign a fair
-        # to it; the experiment will later stratify by distance and ask price.
+        # BTC reaches this method only after Monitor.compute() has passed the
+        # fail-closed contiguous/fresh Binance checks.
         if m in (6,7) and s.side in ("UP","DOWN") and s.distance_bp is not None and s.last_step_bp is not None:
             pullback=(s.side=="UP" and float(s.last_step_bp)<0) or (s.side=="DOWN" and float(s.last_step_bp)>0)
             if pullback and float(s.distance_bp)>=cfg["min_bp"]:
-                dt=parse_iso(s.updated_at) or datetime.now(timezone.utc);ws_ms=(int(dt.timestamp()*1000)//900000)*900000;we_ms=ws_ms+900000
-                window_iso=datetime.fromtimestamp(ws_ms/1000,tz=timezone.utc).isoformat();eid=f"BTC|{window_iso}"
+                dt=parse_iso(s.updated_at) or datetime.now(timezone.utc)
+                ws_ms=(int(dt.timestamp()*1000)//900000)*900000;we_ms=ws_ms+900000
+                window_iso=datetime.fromtimestamp(ws_ms/1000,tz=timezone.utc).isoformat()
+                eid=f"BTC|{window_iso}"
+                capture_id=deterministic_capture_id("BTC",window_iso,m,s.side)
                 with self.lock:
                     exists=eid in self.data.get("experiments",{})
                 if not exists:
-                    ask=s.selected_ask_cents;bid=(s.yes_bid_cents if s.side=="UP" else s.no_bid_cents);spread=(float(ask)-float(bid)) if ask is not None and bid is not None else None
+                    ask=s.selected_ask_cents
+                    bid=(s.yes_bid_cents if s.side=="UP" else s.no_bid_cents)
+                    spread=(float(ask)-float(bid)) if ask is not None and bid is not None else None
+                    reasons=[]
+                    k_last=float(getattr(self.alt.primary,"kalshi_last",0.0) or 0.0)
+                    k_age=max(0.0,(time.time()-k_last)*1000.0) if k_last else None
+                    k_poll=float(self.alt.primary.config.get("kalshi_poll_seconds",2.0))
+                    k_max=int(float(os.getenv("EARLY_MAX_KALSHI_AGE_MS",str(max(15000,int(k_poll*5000))))))
+                    if k_age is None or k_age>k_max:reasons.append("stale_kalshi_book")
+                    if not s.market_ticker:reasons.append("missing_book")
+                    if ask is None or bid is None:reasons.append("missing_bid_or_ask")
+                    if s.basis_ok is not True:reasons.append("basis_invalid")
+                    dq={
+                        "status":"DEGRADED_OBSERVATION" if reasons else "VALID",
+                        "score":0.5 if reasons else 1.0,
+                        "reasons":reasons,
+                        "binance_age_ms":None,
+                        "kalshi_book_age_ms":round(k_age,1) if k_age is not None else None,
+                        "settlement_basis_ok":s.basis_ok,
+                        "minute_closes_complete":True,
+                        "gap_count":0,
+                        "largest_gap_seconds":0,
+                        "book_present":bool(s.market_ticker),
+                        "bid_present":bid is not None,
+                        "ask_present":ask is not None,
+                        "spread_cents":spread,
+                        "source_errors_recent":None,
+                        "reconnects_recent":None,
+                    }
                     fee=effective_fee_cents(ask,self.alt.primary.config,1.0) if ask is not None else None
-                    simulated=bool(s.basis_ok is True and ask is not None and 0<float(ask)<100)
-                    rec={"experiment_id":eid,"recorded_at":s.updated_at,"asset":"BTC","window_start_utc":window_iso,"window_start_ms":ws_ms,"window_end_ms":we_ms,
-                         "early_minute":m,"side":s.side,"model_open":s.model_open,"signal_binance_price":s.btc_price,"distance_bp":s.distance_bp,"last_step_bp":s.last_step_bp,
-                         "early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"],"market_ticker":s.market_ticker,"kalshi_target":s.kalshi_target,"target_gap_bp":s.target_gap_bp,
-                         "basis_ok":bool(s.basis_ok),"ask_cents":ask,"bid_cents":bid,"spread_cents":spread,"entry_simulated":simulated,"entry_ask_cents":ask if simulated else None,"entry_fee_cents":fee if simulated else None,
-                         "main_followthrough":False,"main_followthrough_minute":None,"main_followthrough_side":"","resolved":False,"kalshi_status":"","kalshi_result":"","kalshi_win":None,"settlement_ts":"",
-                         "underlying_final_close":None,"underlying_model_win":None,"benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":""}
-                    with self.lock:self.data["experiments"][eid]=rec;save_json(EARLY_LEDGER_PATH,self.data)
-                    self.maybe_alert(rec)
+                    simulated=bool(dq["status"]=="VALID" and s.basis_ok is True and ask is not None and 0<float(ask)<100)
+                    rec={
+                        "schema_version":EARLY_LEDGER_SCHEMA_VERSION,
+                        "capture_id":capture_id,
+                        "experiment_id":eid,
+                        "model_version":APP_VERSION,
+                        "experimental_rule":EARLY_EXPERIMENT_RULE,
+                        "predicted_probability":None,
+                        "predicted_edge":None,
+                        "recorded_at":s.updated_at,"asset":"BTC","window_start_utc":window_iso,"window_start_ms":ws_ms,"window_end_ms":we_ms,
+                        "early_minute":m,"side":s.side,"model_open":s.model_open,"signal_binance_price":s.btc_price,"distance_bp":s.distance_bp,"last_step_bp":s.last_step_bp,
+                        "early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"],"market_ticker":s.market_ticker,"kalshi_target":s.kalshi_target,"target_gap_bp":s.target_gap_bp,
+                        "basis_ok":bool(s.basis_ok),"ask_cents":ask,"bid_cents":bid,"spread_cents":spread,"entry_simulated":simulated,"entry_ask_cents":ask if simulated else None,"entry_fee_cents":fee if simulated else None,
+                        "main_followthrough":False,"main_followthrough_minute":None,"main_followthrough_side":"","resolved":False,"kalshi_status":"","kalshi_result":"","kalshi_win":None,"settlement_ts":"",
+                        "underlying_final_close":None,"underlying_model_win":None,"benchmark_disagreement":None,"gross_pnl_cents":None,"net_pnl_cents":None,"resolution_error":"",
+                        "data_quality":dq,
+                        "audit":{"created_by_version":APP_VERSION,"last_updated_by_version":APP_VERSION},
+                    }
+                    with self.lock:
+                        if eid not in self.data["experiments"]:
+                            old_last_capture=self.data.get("last_capture_utc")
+                            self.data["counters"]["captures_received"]+=1
+                            self.data["experiments"][eid]=rec
+                            self.data["counters"]["captures_persisted"]+=1
+                            self.data["last_capture_utc"]=rec["recorded_at"]
+                            try:
+                                self.save()
+                            except Exception:
+                                self.data["experiments"].pop(eid,None)
+                                self.data["counters"]["captures_received"]-=1
+                                self.data["counters"]["captures_persisted"]-=1
+                                self.data["last_capture_utc"]=old_last_capture
+                                raise
+                            created=True
+                        else:
+                            self.data["counters"]["duplicates_suppressed"]+=1
+                            self.data["rejections"]["duplicate_capture"]+=1
+                            created=False
+                    if created:self.maybe_alert(rec)
         # Record whether the later evidence-aligned BTC setup appeared.
         if s.status in ("CONFIRMED","ENTRY ZONE","READY / PRICE HIGH","BASIS WARNING","ALREADY COUNTED") and m in (7,8,9,10):
             dt=parse_iso(s.updated_at) or datetime.now(timezone.utc);ws_ms=(int(dt.timestamp()*1000)//900000)*900000;eid=f"BTC|{datetime.fromtimestamp(ws_ms/1000,tz=timezone.utc).isoformat()}"
             with self.lock:
                 r=self.data.get("experiments",{}).get(eid)
                 if r and not r.get("main_followthrough"):
-                    r["main_followthrough"]=True;r["main_followthrough_minute"]=m;r["main_followthrough_side"]=s.side;save_json(EARLY_LEDGER_PATH,self.data)
+                    r["main_followthrough"]=True
+                    r["main_followthrough_minute"]=m
+                    r["main_followthrough_side"]=s.side
+                    r.setdefault("audit",{})["last_updated_by_version"]=APP_VERSION
+                    self.save()
         return None
 
     def observe_main_state(self,s):
@@ -1193,8 +1545,12 @@ class EarlyEntryLab:
             r=self.data.get("experiments",{}).get(eid)
             if not r:return
             if not r.get("main_followthrough") and s.get("last_completed_minute") in (7,8,9,10):
-                r["main_followthrough"]=True;r["main_followthrough_minute"]=s.get("last_completed_minute");r["main_followthrough_side"]=s.get("side");changed=True
-            if changed:save_json(EARLY_LEDGER_PATH,self.data)
+                r["main_followthrough"]=True
+                r["main_followthrough_minute"]=s.get("last_completed_minute")
+                r["main_followthrough_side"]=s.get("side")
+                r.setdefault("audit",{})["last_updated_by_version"]=APP_VERSION
+                changed=True
+            if changed:self.save()
 
     def maybe_alert(self,rec):
         if os.getenv("EARLY_LAB_ALERTS","1").lower() not in ("1","true","yes"):return
@@ -1229,10 +1585,15 @@ class EarlyEntryLab:
                             if rec.get("kalshi_win") is not None:rec["benchmark_disagreement"]=(bool(rec.get("underlying_model_win"))!=bool(rec.get("kalshi_win")))
                     except Exception:pass
                 rec["resolution_error"]=""
-                with self.lock:self.data["experiments"][eid]=rec
+                rec.setdefault("audit",{})["last_updated_by_version"]=APP_VERSION
+                with self.lock:
+                    self.data["experiments"][eid]=rec
+                    if rec.get("resolved"):
+                        self.data["last_resolution_utc"]=rec.get("resolved_at") or datetime.now(timezone.utc).isoformat()
                 changed=True
             except Exception as e:
                 rec["resolution_error"]=str(e)[:300]
+                rec.setdefault("audit",{})["last_updated_by_version"]=APP_VERSION
                 with self.lock:self.data["experiments"][eid]=rec
                 changed=True
             time.sleep(0.05)
@@ -1245,40 +1606,146 @@ class EarlyEntryLab:
         sim=[r for r in resolved if r.get("entry_simulated") and r.get("entry_ask_cents") is not None]
         wins=sum(1 for r in sim if r.get("kalshi_win"))
         pnl=sum(float(r.get("net_pnl_cents") or 0) for r in sim)/100.0
-        avgask=(sum(float(r.get("entry_ask_cents")) for r in quoted)/len(quoted)) if quoted else None
-        # Follow-through is only evaluated after settlement so fresh captures are not
+        asks=sorted(float(r.get("entry_ask_cents")) for r in quoted)
+        avgask=(sum(asks)/len(asks)) if asks else None
+        if asks:
+            mid=len(asks)//2
+            medianask=asks[mid] if len(asks)%2 else (asks[mid-1]+asks[mid])/2.0
+        else:
+            medianask=None
+        # Follow-through is evaluated only after settlement so fresh captures are not
         # temporarily counted as failures before M7-M10 has had a chance to occur.
-        fcount=sum(1 for r in resolved if r.get("main_followthrough"))
+        follow_resolved=[r for r in resolved if ((r.get("data_quality") or {}).get("status") or "LEGACY_UNASSESSED")!="DEGRADED_OBSERVATION"]
+        fcount=sum(1 for r in follow_resolved if r.get("main_followthrough"))
         bench=[r for r in resolved if r.get("benchmark_disagreement") is not None]
-        return {"recorded":len(rows),"resolved":len(resolved),"simulated_entries":len(quoted),"resolved_entries":len(sim),"wins":wins,"losses":len(sim)-wins,
-                "hit_pct":(100*wins/len(sim) if sim else None),"net_pnl_dollars":pnl,"avg_net_pnl_per_entry_dollars":(pnl/len(sim) if sim else None),
-                "avg_ask_cents":avgask,"main_followthrough_pct":(100*fcount/len(resolved) if resolved else None),
-                "benchmark_disagreement_pct":(100*sum(1 for r in bench if r.get('benchmark_disagreement'))/len(bench) if bench else None)}
+        qcounts={}
+        for r in rows:
+            qs=((r.get("data_quality") or {}).get("status") or "LEGACY_UNASSESSED")
+            qcounts[qs]=qcounts.get(qs,0)+1
+        return {
+            "recorded":len(rows),
+            "resolved":len(resolved),
+            "simulated_entries":len(quoted),
+            "resolved_entries":len(sim),
+            "wins":wins,
+            "losses":len(sim)-wins,
+            "hit_pct":(100*wins/len(sim) if sim else None),
+            "wilson_low_pct":(wilson_low(wins,len(sim)) if sim else None),
+            "net_pnl_dollars":pnl,
+            "avg_net_pnl_per_entry_dollars":(pnl/len(sim) if sim else None),
+            "avg_ask_cents":avgask,
+            "median_ask_cents":medianask,
+            "main_followthrough_pct":(100*fcount/len(follow_resolved) if follow_resolved else None),
+            "benchmark_disagreement_pct":(100*sum(1 for r in bench if r.get("benchmark_disagreement"))/len(bench) if bench else None),
+            "quality_counts":qcounts,
+        }
 
     def metrics(self):
-        with self.lock: rows=[dict(r) for r in self.data.get("experiments",{}).values()]
+        with self.lock:
+            rows=[dict(r) for r in self.data.get("experiments",{}).values()]
+            counters=dict(self.data.get("counters",{}))
+            rejections=dict(self.data.get("rejections",{}))
+            last_capture=self.data.get("last_capture_utc")
+            last_resolution=self.data.get("last_resolution_utc")
+            last_persist=self.data.get("last_persist_utc")
         by=[]
         for asset,cfg in EARLY_LAB_MODELS.items():
-            aa=[r for r in rows if r.get("asset")==asset];x=self._cohort(aa);x.update({"asset":asset,"early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"]})
+            aa=[r for r in rows if r.get("asset")==asset]
+            x=self._cohort(aa)
+            x.update({"asset":asset,"early_threshold_bp":cfg["min_bp"],"main_threshold_bp":cfg["main_bp"]})
             by.append(x)
         minute=[]
         for m in (6,7):
-            mm=[r for r in rows if r.get("early_minute")==m];x=self._cohort(mm);x["minute"]=m;minute.append(x)
+            mm=[r for r in rows if r.get("early_minute")==m]
+            x=self._cohort(mm);x["minute"]=m;minute.append(x)
+        side=[]
+        for s in ("UP","DOWN"):
+            ss=[r for r in rows if r.get("side")==s]
+            x=self._cohort(ss);x["side"]=s;side.append(x)
+        # Preserve the v2.5 cumulative view for continuity.
         bands=[]
         for cap in (70,75,80,85,90,95,99):
-            rr=[r for r in rows if r.get("entry_ask_cents") is not None and float(r.get("entry_ask_cents"))<=cap];x=self._cohort(rr);x["max_ask_cents"]=cap;bands.append(x)
-        return {"version":APP_VERSION,"mode":"early-entry-exploratory","generated_at":datetime.now(timezone.utc).isoformat(),
-                "rule":"first qualifying completed M6 or M7 pullback per asset/window; relaxed threshold; no historical fair assigned",
-                "totals":self._cohort(rows),"by_asset":by,"by_minute":minute,"price_bands":bands}
+            rr=[r for r in rows if r.get("entry_ask_cents") is not None and float(r.get("entry_ask_cents"))<=cap]
+            x=self._cohort(rr);x["max_ask_cents"]=cap;bands.append(x)
+        ask_bands=[]
+        for lo,hi,label in ((0,49.999,"0-49"),(50,59.999,"50-59"),(60,69.999,"60-69"),(70,79.999,"70-79"),(80,89.999,"80-89"),(90,99.999,"90-99")):
+            rr=[r for r in rows if r.get("entry_ask_cents") is not None and lo<=float(r.get("entry_ask_cents"))<=hi]
+            x=self._cohort(rr);x.update({"ask_band":label,"min_ask_cents":lo,"max_ask_cents":hi});ask_bands.append(x)
+        distance_bands=[]
+        for lo,hi,label in ((10,14.999,"10-14"),(15,24.999,"15-24"),(25,34.999,"25-34"),(35,10**9,"35+")):
+            rr=[r for r in rows if r.get("distance_bp") is not None and lo<=float(r.get("distance_bp"))<=hi]
+            x=self._cohort(rr);x.update({"distance_bp_band":label,"min_distance_bp":lo,"max_distance_bp":None if hi>=10**9 else hi});distance_bands.append(x)
+        quality=[]
+        qnames=sorted({((r.get("data_quality") or {}).get("status") or "LEGACY_UNASSESSED") for r in rows} | {"VALID","DEGRADED_OBSERVATION","LEGACY_UNASSESSED"})
+        for q in qnames:
+            qq=[r for r in rows if ((r.get("data_quality") or {}).get("status") or "LEGACY_UNASSESSED")==q]
+            x=self._cohort(qq);x["data_quality_status"]=q;quality.append(x)
+        totals=self._cohort(rows)
+        received=int(counters.get("captures_received",0))
+        persisted=int(counters.get("captures_persisted",0))
+        rejected=int(counters.get("captures_rejected",0))
+        quality_reason_counts={}
+        for r in rows:
+            for reason in ((r.get("data_quality") or {}).get("reasons") or []):
+                quality_reason_counts[reason]=quality_reason_counts.get(reason,0)+1
+        operational={
+            **counters,
+            "pending_capture_writes":0,
+            "counter_invariant_ok":received==(persisted+rejected),
+            "last_capture_utc":last_capture,
+            "last_resolution_utc":last_resolution,
+            "last_persist_utc":last_persist,
+            "rejections":rejections,
+            "quality_reason_counts":quality_reason_counts,
+        }
+        return {
+            "version":APP_VERSION,
+            "ledger_schema":EARLY_LEDGER_SCHEMA_VERSION,
+            "mode":"early-entry-exploratory",
+            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "rule":"first qualifying completed M6 or M7 pullback per asset/window; relaxed threshold; no historical fair assigned",
+            "probability_model":"NOT_ASSIGNED",
+            "totals":totals,
+            "by_asset":by,
+            "by_minute":minute,
+            "by_side":side,
+            "price_bands":bands,
+            "ask_bands":ask_bands,
+            "distance_bands":distance_bands,
+            "by_data_quality_status":quality,
+            "operational":operational,
+        }
 
     def csv_bytes(self):
         import io
-        fields=["experiment_id","recorded_at","asset","window_start_utc","early_minute","side","model_open","signal_binance_price","distance_bp","last_step_bp","early_threshold_bp","main_threshold_bp",
-                "market_ticker","kalshi_target","target_gap_bp","basis_ok","ask_cents","bid_cents","spread_cents","entry_simulated","entry_ask_cents","entry_fee_cents","main_followthrough","main_followthrough_minute","main_followthrough_side",
-                "resolved","kalshi_status","kalshi_result","kalshi_win","settlement_ts","underlying_final_close","underlying_model_win","benchmark_disagreement","gross_pnl_cents","net_pnl_cents","resolution_error"]
+        fields=[
+            "schema_version","capture_id","experiment_id","model_version","experimental_rule","predicted_probability","predicted_edge",
+            "recorded_at","asset","window_start_utc","early_minute","side","model_open","signal_binance_price","distance_bp","last_step_bp","early_threshold_bp","main_threshold_bp",
+            "market_ticker","kalshi_target","target_gap_bp","basis_ok","ask_cents","bid_cents","spread_cents","entry_simulated","entry_ask_cents","entry_fee_cents",
+            "data_quality_status","data_quality_score","data_quality_reasons","binance_age_ms","kalshi_book_age_ms","minute_closes_complete","gap_count","largest_gap_seconds",
+            "book_present","bid_present","ask_present","main_followthrough","main_followthrough_minute","main_followthrough_side",
+            "resolved","kalshi_status","kalshi_result","kalshi_win","settlement_ts","underlying_final_close","underlying_model_win","benchmark_disagreement",
+            "gross_pnl_cents","net_pnl_cents","resolution_error"
+        ]
         buf=io.StringIO();w=csv.DictWriter(buf,fieldnames=fields,extrasaction="ignore");w.writeheader()
-        with self.lock: vals=sorted(self.data.get("experiments",{}).values(),key=lambda r:r.get("recorded_at") or "")
-        for r in vals:w.writerow(r)
+        with self.lock: vals=sorted((dict(r) for r in self.data.get("experiments",{}).values()),key=lambda r:r.get("recorded_at") or "")
+        for r in vals:
+            dq=dict(r.get("data_quality") or {})
+            row=dict(r)
+            row.update({
+                "data_quality_status":dq.get("status"),
+                "data_quality_score":dq.get("score"),
+                "data_quality_reasons":"|".join(dq.get("reasons") or []),
+                "binance_age_ms":dq.get("binance_age_ms"),
+                "kalshi_book_age_ms":dq.get("kalshi_book_age_ms"),
+                "minute_closes_complete":dq.get("minute_closes_complete"),
+                "gap_count":dq.get("gap_count"),
+                "largest_gap_seconds":dq.get("largest_gap_seconds"),
+                "book_present":dq.get("book_present"),
+                "bid_present":dq.get("bid_present"),
+                "ask_present":dq.get("ask_present"),
+            })
+            w.writerow(row)
         return buf.getvalue().encode("utf-8")
 
     def maybe_daily_report(self):
@@ -1965,18 +2432,60 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():return
         path=urlparse(self.path).path
         if path=="/health":
-            stale=time.time()-MONITOR.last_loop_at
-            alt_stale=(time.time()-ALT_MONITOR.last_loop_at) if ALT_MONITOR else None
+            now_ts=time.time()
+            stale=now_ts-MONITOR.last_loop_at
+            alt_stale=(now_ts-ALT_MONITOR.last_loop_at) if ALT_MONITOR else None
             met=ALT_MONITOR.ledger.metrics()["totals"] if ALT_MONITOR else {}
-            self._send(200,json.dumps({"ok":True,"version":APP_VERSION,"monitor_loop_age_seconds":round(stale,1),
-                                       "multiasset_loop_age_seconds":round(alt_stale,1) if alt_stale is not None else None,
-                                       "multiasset_mode":"shadow" if ALT_MONITOR else "off","shadow_resolved_setups":met.get("resolved_setups"),
-                                       "shadow_resolved_entries":met.get("resolved_entries"),"shadow_pending_setups":met.get("pending_setups"),
-                                       "shadow_net_pnl_dollars":met.get("entry_net_pnl_dollars"),"portfolio_shadow_entries":met.get("portfolio_entries"),
-                                       "portfolio_shadow_net_pnl_dollars":met.get("portfolio_net_pnl_dollars"),
-                                       "early_lab_recorded":(ALT_MONITOR.early.metrics().get("totals",{}).get("recorded") if ALT_MONITOR else 0),
-                                       "early_lab_resolved":(ALT_MONITOR.early.metrics().get("totals",{}).get("resolved") if ALT_MONITOR else 0),
-                                       "early_lab_net_pnl_dollars":(ALT_MONITOR.early.metrics().get("totals",{}).get("net_pnl_dollars") if ALT_MONITOR else 0.0)}))
+            early_metrics=ALT_MONITOR.early.metrics() if ALT_MONITOR else {}
+            early_totals=early_metrics.get("totals",{})
+            early_op=early_metrics.get("operational",{})
+            kalshi_age_ms=(max(0.0,(now_ts-float(getattr(MONITOR,"kalshi_last",0.0) or 0.0))*1000.0) if getattr(MONITOR,"kalshi_last",0.0) else None)
+            stale_limit=float(os.getenv("WATCHDOG_STALE_SECONDS","60"))
+            health_ok=bool(stale<=stale_limit and (alt_stale is None or alt_stale<=stale_limit))
+            payload={
+                "ok":health_ok,
+                "version":APP_VERSION,
+                "monitor_loop_age_seconds":round(stale,1),
+                "multiasset_loop_age_seconds":round(alt_stale,1) if alt_stale is not None else None,
+                "multiasset_mode":"shadow" if ALT_MONITOR else "off",
+                "shadow_resolved_setups":met.get("resolved_setups"),
+                "shadow_resolved_entries":met.get("resolved_entries"),
+                "shadow_pending_setups":met.get("pending_setups"),
+                "shadow_net_pnl_dollars":met.get("entry_net_pnl_dollars"),
+                "portfolio_shadow_entries":met.get("portfolio_entries"),
+                "portfolio_shadow_net_pnl_dollars":met.get("portfolio_net_pnl_dollars"),
+                # Backward-compatible flat fields.
+                "early_lab_recorded":early_totals.get("recorded",0),
+                "early_lab_resolved":early_totals.get("resolved",0),
+                "early_lab_net_pnl_dollars":early_totals.get("net_pnl_dollars",0.0),
+                # v2.6 operational view.
+                "early_lab":{
+                    "mode":"experimental-no-entry",
+                    "ledger_schema":early_metrics.get("ledger_schema"),
+                    "captures_received":early_op.get("captures_received",0),
+                    "captures_persisted":early_op.get("captures_persisted",0),
+                    "captures_rejected":early_op.get("captures_rejected",0),
+                    "duplicates_suppressed":early_op.get("duplicates_suppressed",0),
+                    "pending_resolutions":max(0,int(early_totals.get("recorded",0))-int(early_totals.get("resolved",0))),
+                    "last_capture_utc":early_op.get("last_capture_utc"),
+                    "last_resolution_utc":early_op.get("last_resolution_utc"),
+                    "last_persist_utc":early_op.get("last_persist_utc"),
+                    "counter_invariant_ok":early_op.get("counter_invariant_ok"),
+                    "rejections":early_op.get("rejections",{}),
+                    "probability_model":"NOT_ASSIGNED",
+                },
+                "sources":{
+                    "binance":{
+                        "healthy":stale<=stale_limit,
+                        "monitor_loop_age_ms":round(stale*1000.0,1),
+                    },
+                    "kalshi":{
+                        "healthy":kalshi_age_ms is not None and kalshi_age_ms<=max(15000,float(MONITOR.config.get("kalshi_poll_seconds",2.0))*5000),
+                        "book_age_ms":round(kalshi_age_ms,1) if kalshi_age_ms is not None else None,
+                    },
+                },
+            }
+            self._send(200,json.dumps(payload))
         elif path=="/":
             self._send(200,DASHBOARD_HTML,"text/html; charset=utf-8")
         elif path=="/api/state":
