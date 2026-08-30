@@ -96,7 +96,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.4-railway-execution-lab"
+APP_VERSION = "2.4.1-railway-execution-lab-hotfix"
 
 
 def load_json(path):
@@ -404,6 +404,8 @@ class State:
     seconds_left: int | None = None
     side: str = "—"
     distance_bp: float | None = None
+    live_distance_bp: float | None = None
+    forming_side: str = "—"
     last_step_bp: float | None = None
     pullback_confirmed: bool = False
     pullback_forming: bool = False
@@ -624,10 +626,18 @@ class Monitor:
             else:
                 status="READY / PRICE HIGH"; detail=f"Señal confirmada, pero {selected} está caro para el edge mínimo configurado."
 
+        # Safety/UI guard: size is actionable only after a CONFIRMED setup also
+        # passes basis + max-buy and becomes ENTRY ZONE. Positive Kelly on a
+        # forming or overpriced quote must never display a tradable size.
+        if status != "ENTRY ZONE":
+            risk_pct=0.0
+            risk_dollars=0.0
+            contracts_suggested=0
+
         return State(
             updated_at=now.isoformat(),mode="demo" if self.demo else "live",status=status,status_detail=detail,
             btc_price=btc_price,model_open=model_open,current_minute=current_minute,last_completed_minute=last_completed_minute,
-            seconds_left=seconds_left,side=side,distance_bp=dist,last_step_bp=step,pullback_confirmed=confirmed,
+            seconds_left=seconds_left,side=side,distance_bp=dist,live_distance_bp=live_dist,forming_side=live_side,last_step_bp=step,pullback_confirmed=confirmed,
             pullback_forming=forming,never_crossed_open=never_crossed,quality=quality,fair_pct=fair,
             conservative_fair_pct=cons,sample_n=sample_n,market_ticker=ticker,market_close_time=close_time,
             kalshi_target=target,target_gap_bp=target_gap,target_side=target_side,
@@ -663,13 +673,22 @@ class Monitor:
         statuses=set(self.config.get("telegram_alert_statuses", []))
         if s.status not in statuses:
             return
-        key=f"{s.status}|{s.market_ticker}|{s.last_completed_minute}|{s.side}|{s.quality}"
+        # FORMING is intraminute: label the LIVE minute, not the last completed
+        # minute. This prevents an M7 preview from being misread as an M6 signal.
+        alert_minute=s.current_minute if s.status=="FORMING" else s.last_completed_minute
+        alert_side=(s.forming_side if s.status=="FORMING" and s.forming_side in ("UP","DOWN") else s.side)
+        key=f"{s.status}|{s.market_ticker}|{alert_minute}|{alert_side}|{s.quality}"
         if key==self.last_alert_key:
             return
         self.last_alert_key=key
         if s.status in ("CONFIRMED","ENTRY ZONE","BASIS WARNING"):
             self.write_journal(s)
-        if s.selected_ask_cents is not None and s.max_buy_cents is not None and s.edge_points is not None:
+        if s.status=="FORMING":
+            live_dist=s.live_distance_bp if s.live_distance_bp is not None else 0.0
+            text=(f"BTC15M FORMING · {alert_side} · PREVIEW\n"
+                  f"LIVE M{alert_minute} · {live_dist:.1f} bp\n"
+                  f"NO ENTRY · espera el cierre de M{alert_minute}. La evidencia validada usa cierres M7–M10.")
+        elif s.selected_ask_cents is not None and s.max_buy_cents is not None and s.edge_points is not None:
             text=(f"BTC15M {s.status} · {s.side} · {s.quality}\n"
                   f"M{s.last_completed_minute} · {s.distance_bp:.1f} bp · fair cons {s.conservative_fair_pct:.1f}%\n"
                   f"Ask {s.selected_ask_cents:.1f}c · max {s.max_buy_cents:.1f}c · edge {s.edge_points:.1f}pt\n"
@@ -927,7 +946,7 @@ class AltShadowMonitor:
         if self.startup_sent:
             return
         self.startup_sent=True
-        lines=["Multiasset EXECUTION LAB v2.4 ✅",
+        lines=["Multiasset EXECUTION LAB v2.4.1 ✅",
                "ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
                "Fees + orderbook depth + benchmark audit + portfolio shadow + promotion gates.",
                "BTC sigue igual. HYPE excluido. Sin órdenes automáticas."]
