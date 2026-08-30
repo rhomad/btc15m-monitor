@@ -31,7 +31,7 @@ JOURNAL_PATH = DATA_DIR / "signal_journal.csv"
 BINANCE_BASE = "https://data-api.binance.vision"
 KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2"
 KALSHI_SERIES = os.getenv("KALSHI_SERIES", "KXBTC15M")
-APP_VERSION = "2.1-railway-research"
+APP_VERSION = "2.2-railway-multiasset-shadow"
 
 
 def load_json(path):
@@ -166,11 +166,12 @@ def bp(a, b):
 
 
 def extract_target(market):
+    """Best-effort extraction of the Kalshi target/strike for assets at any price scale."""
     for key in ("floor_strike", "cap_strike", "strike", "strike_value"):
         v = market.get(key)
         try:
             x = float(v)
-            if x > 1000:
+            if math.isfinite(x) and x > 0:
                 return x
         except Exception:
             pass
@@ -179,14 +180,26 @@ def extract_target(market):
         v = market.get(key)
         if v is not None:
             candidates.append(json.dumps(v) if isinstance(v, (dict, list)) else str(v))
+    # Prefer explicitly labelled target/strike values.
     for text in candidates:
-        m = re.search(r"(?:target(?:\s+price)?|strike)[^0-9$]{0,30}\$?\s*([0-9]{4,6}(?:\.[0-9]+)?)", text, re.I)
+        m = re.search(r"(?:target(?:\s+price)?|strike|price\s+to\s+beat)[^0-9$]{0,40}\$?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)", text, re.I)
         if m:
-            return float(m.group(1))
+            try:
+                x = float(m.group(1).replace(",", ""))
+                if x > 0:
+                    return x
+            except Exception:
+                pass
+    # Then accept dollar-denominated values, including sub-dollar crypto.
     for text in candidates:
-        m = re.search(r"\$\s*([0-9]{2,3}(?:,[0-9]{3})+(?:\.[0-9]+)?)", text)
-        if m:
-            return float(m.group(1).replace(",", ""))
+        vals = re.findall(r"\$\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)", text)
+        for raw in vals:
+            try:
+                x = float(raw.replace(",", ""))
+                if x > 0:
+                    return x
+            except Exception:
+                pass
     return None
 
 
@@ -540,6 +553,238 @@ class Monitor:
             time.sleep(max(0.5,float(self.config.get("poll_seconds",1.0))))
 
 
+
+# Multiasset live forward-test. BTC remains untouched; these assets run in SHADOW mode.
+# Thresholds are deliberately stricter than the first PASS threshold in the research file.
+# Fair is fixed at the selected tier to avoid overfitting sparse higher-distance buckets.
+ALT_LIVE_MODELS = {
+    "ETH":  {"symbol":"ETHUSDT",  "series":"KXETH15M",  "min_bp":30.0, "fair_pct":96.74229203025014, "cons_pct":95.0,              "n":1719, "holdout_n":180, "holdout_pct":95.0},
+    "SOL":  {"symbol":"SOLUSDT",  "series":"KXSOL15M",  "min_bp":30.0, "fair_pct":95.96622889305816, "cons_pct":94.11764705882352, "n":2132, "holdout_n":291, "holdout_pct":95.53264604810997},
+    "XRP":  {"symbol":"XRPUSDT",  "series":"KXXRP15M",  "min_bp":40.0, "fair_pct":96.8222442899702,  "cons_pct":94.4649446494465,  "n":1007, "holdout_n":271, "holdout_pct":94.4649446494465},
+    "DOGE": {"symbol":"DOGEUSDT", "series":"KXDOGE15M", "min_bp":35.0, "fair_pct":96.79043423536817, "cons_pct":94.67213114754098, "n":1589, "holdout_n":244, "holdout_pct":94.67213114754098},
+    "BNB":  {"symbol":"BNBUSDT",  "series":"KXBNB15M",  "min_bp":20.0, "fair_pct":95.13888888888889, "cons_pct":93.29268292682927, "n":2160, "holdout_n":268, "holdout_pct":94.40298507462687},
+}
+ALT_JOURNAL_PATH = DATA_DIR / "multiasset_shadow_journal.csv"
+
+
+class AltShadowMonitor:
+    """Read-only multiasset forward test against live Kalshi prices.
+
+    This engine never places orders. It journals every confirmed underlying setup and
+    only sends Telegram when a live Kalshi price is cheap enough to qualify as a
+    SHADOW ENTRY ZONE, or when the settlement-basis guard fails.
+    """
+    def __init__(self, primary_monitor):
+        self.primary = primary_monitor
+        self.models = ALT_LIVE_MODELS
+        self.states = {a: {"asset":a, "status":"STARTING"} for a in self.models}
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.last_loop_at = time.time()
+        self.kalshi_cache = {}
+        self.kalshi_last = {}
+        self.last_journal_key = {}
+        self.last_alert_key = {}
+        self.first_signal = {}
+        self.startup_sent = False
+        self.ensure_journal()
+
+    def ensure_journal(self):
+        if ALT_JOURNAL_PATH.exists():
+            return
+        with open(ALT_JOURNAL_PATH, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                "timestamp_utc","asset","window_start_utc","status","market_ticker","minute","side",
+                "model_open","live_price","distance_bp","threshold_bp","fair_pct","conservative_fair_pct",
+                "sample_n","holdout_n","holdout_pct","selected_contract","ask_cents","max_buy_cents",
+                "edge_points","kalshi_target","target_gap_bp","basis_ok"
+            ])
+
+    def get_states(self):
+        with self.lock:
+            return json.loads(json.dumps(self.states))
+
+    def fetch_binance(self, symbol):
+        url = BINANCE_BASE + "/api/v3/klines?" + urlencode({"symbol":symbol,"interval":"1m","limit":20})
+        return http_json(url)
+
+    def fetch_kalshi(self, asset, series, now):
+        last = self.kalshi_last.get(asset, 0.0)
+        if time.time() - last < float(os.getenv("ALT_KALSHI_POLL_SECONDS", "3")) and self.kalshi_cache.get(asset):
+            return self.kalshi_cache[asset]
+        markets = http_json(KALSHI_BASE + "/markets?" + urlencode({"series_ticker":series,"status":"open","limit":20})).get("markets", [])
+        if not markets:
+            markets = http_json(KALSHI_BASE + "/markets?" + urlencode({"series_ticker":series,"status":"unopened","limit":20})).get("markets", [])
+        market = choose_kalshi_market(markets, now)
+        if market and extract_target(market) is None and market.get("event_ticker"):
+            try:
+                ev = http_json(KALSHI_BASE + "/events/" + market["event_ticker"]).get("event", {})
+                market["_event_json"] = json.dumps(ev)
+            except Exception:
+                pass
+        self.kalshi_cache[asset] = market
+        self.kalshi_last[asset] = time.time()
+        return market
+
+    def compute(self, asset, model, klines, market):
+        now = datetime.now(timezone.utc)
+        now_ms = int(now.timestamp()*1000)
+        window_start_ms = (now_ms // 900000) * 900000
+        window_end_ms = window_start_ms + 900000
+        current_minute = int((now_ms-window_start_ms)//60000)+1
+        seconds_left = max(0, int((window_end_ms-now_ms)/1000))
+        rows=[]
+        for k in klines or []:
+            try:
+                ot=int(k[0]); op=float(k[1]); cl=float(k[4]); ct=int(k[6])
+                if window_start_ms <= ot < window_end_ms:
+                    rows.append({"open_time":ot,"open":op,"close":cl,"close_time":ct})
+            except Exception:
+                continue
+        rows.sort(key=lambda r:r["open_time"])
+        if not rows:
+            raise ValueError("current 15m window missing")
+        model_open = rows[0]["open"]
+        live_price = rows[-1]["close"]
+        completed = [r for r in rows if r["close_time"] < now_ms]
+        last_completed_minute = len(completed)
+        last_close = completed[-1]["close"] if completed else None
+        prev_close = completed[-2]["close"] if len(completed)>=2 else None
+        side = "UP" if last_close is not None and last_close>model_open else ("DOWN" if last_close is not None and last_close<model_open else "—")
+        dist = abs(bp(last_close, model_open)) if last_close is not None else None
+        step = bp(last_close, prev_close) if last_close is not None and prev_close is not None else None
+        pullback = (side=="UP" and step is not None and step<0) or (side=="DOWN" and step is not None and step>0)
+        confirmed = bool(last_completed_minute in (7,8,9,10) and pullback and dist is not None and dist >= model["min_bp"])
+
+        ticker=""; target=None; yes_bid=yes_ask=no_bid=no_ask=None
+        if market:
+            ticker=market.get("ticker","")
+            target=extract_target(market)
+            yes_bid,yes_ask,no_bid,no_ask=get_price_fields(market)
+
+        target_gap = bp(target, model_open) if target else None
+        target_side = ("UP" if live_price>target else "DOWN") if target else "—"
+        max_basis=float(self.primary.config.get("max_basis_gap_bp",8.0))
+        # If a target cannot be extracted, shadow logging continues but entry status is blocked.
+        basis_ok = bool(target is not None and target_gap is not None and abs(target_gap)<=max_basis and (side=="—" or target_side==side))
+
+        selected_ask = yes_ask*100 if side=="UP" and yes_ask is not None else (no_ask*100 if side=="DOWN" and no_ask is not None else None)
+        edge_min=float(self.primary.config.get("edge_min_points",10.0))
+        fee_buf=float(self.primary.config.get("fee_buffer_cents",1.0))
+        max_buy=model["cons_pct"]-edge_min-fee_buf
+        edge=(model["cons_pct"]-selected_ask-fee_buf) if selected_ask is not None else None
+
+        status="WAIT"
+        detail=f"Waiting for M7-M10 pullback >= {model['min_bp']:.0f} bp."
+        if confirmed:
+            status="SHADOW CONFIRMED"
+            detail=f"Underlying setup confirmed at M{last_completed_minute}; live execution still under forward test."
+            if not basis_ok:
+                status="BASIS WARNING"
+                detail="Underlying setup confirmed, but Kalshi target/basis is missing or not aligned."
+            elif selected_ask is not None and selected_ask<=max_buy:
+                status="SHADOW ENTRY ZONE"
+                detail="Structure + live Kalshi ask satisfy the conservative shadow edge test."
+            elif selected_ask is None:
+                detail += " Kalshi ask unavailable."
+            else:
+                status="SHADOW PRICE HIGH"
+                detail="Underlying setup confirmed, but the live contract is too expensive for the configured edge."
+
+        return {
+            "updated_at":now.isoformat(),"asset":asset,"status":status,"detail":detail,
+            "window_start_utc":datetime.fromtimestamp(window_start_ms/1000,tz=timezone.utc).isoformat(),
+            "current_minute":current_minute,"last_completed_minute":last_completed_minute,"seconds_left":seconds_left,
+            "model_open":model_open,"live_price":live_price,"side":side,"distance_bp":dist,"last_step_bp":step,
+            "threshold_bp":model["min_bp"],"fair_pct":model["fair_pct"],"conservative_fair_pct":model["cons_pct"],
+            "sample_n":model["n"],"holdout_n":model["holdout_n"],"holdout_pct":model["holdout_pct"],
+            "market_ticker":ticker,"kalshi_target":target,"target_gap_bp":target_gap,"target_side":target_side,
+            "yes_bid_cents":yes_bid*100 if yes_bid is not None else None,"yes_ask_cents":yes_ask*100 if yes_ask is not None else None,
+            "no_bid_cents":no_bid*100 if no_bid is not None else None,"no_ask_cents":no_ask*100 if no_ask is not None else None,
+            "selected_contract":side if side in ("UP","DOWN") else "—","selected_ask_cents":selected_ask,
+            "max_buy_cents":max_buy,"edge_points":edge,"basis_ok":basis_ok,"api_error":""
+        }
+
+    def journal_if_confirmed(self, s):
+        if not s["status"].startswith("SHADOW") and s["status"]!="BASIS WARNING":
+            return
+        if s["status"]=="WAIT":
+            return
+        key=f"{s['asset']}|{s['window_start_utc']}"
+        if self.last_journal_key.get(s["asset"])==key:
+            return
+        self.last_journal_key[s["asset"]]=key
+        with open(ALT_JOURNAL_PATH,"a",newline="",encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                s["updated_at"],s["asset"],s["window_start_utc"],s["status"],s["market_ticker"],
+                s["last_completed_minute"],s["side"],s["model_open"],s["live_price"],s["distance_bp"],
+                s["threshold_bp"],s["fair_pct"],s["conservative_fair_pct"],s["sample_n"],s["holdout_n"],
+                s["holdout_pct"],s["selected_contract"],s["selected_ask_cents"],s["max_buy_cents"],
+                s["edge_points"],s["kalshi_target"],s["target_gap_bp"],s["basis_ok"]
+            ])
+
+    def maybe_alert(self, s):
+        if s["status"] not in ("SHADOW ENTRY ZONE","BASIS WARNING"):
+            return
+        key=f"{s['asset']}|{s['status']}|{s['window_start_utc']}|{s['side']}"
+        if self.last_alert_key.get(s["asset"])==key:
+            return
+        self.last_alert_key[s["asset"]]=key
+        m=s.get("last_completed_minute") or s.get("current_minute")
+        if s["status"]=="SHADOW ENTRY ZONE":
+            text=(f"{s['asset']}15M SHADOW ENTRY ZONE · {s['side']}\\n"
+                  f"M{m} · {s['distance_bp']:.1f} bp · fair cons {s['conservative_fair_pct']:.1f}%\\n"
+                  f"Ask {s['selected_ask_cents']:.1f}c · max {s['max_buy_cents']:.1f}c · edge {s['edge_points']:.1f}pt\\n"
+                  f"FORWARD TEST — no ejecutar todavía")
+        else:
+            gap="—" if s.get("target_gap_bp") is None else f"{s['target_gap_bp']:.1f}bp"
+            text=(f"{s['asset']}15M BASIS WARNING · {s['side']}\\n"
+                  f"M{m} · {s['distance_bp']:.1f} bp · gap {gap}\\n"
+                  f"Setup guardado, pero no usar como entrada.")
+        post_telegram(telegram_token(), telegram_chat_id(self.primary.config), text)
+
+    def send_startup(self):
+        if self.startup_sent:
+            return
+        self.startup_sent=True
+        lines=["Multiasset SHADOW monitor ✅",
+               "ETH ≥30bp · SOL ≥30bp · XRP ≥40bp · DOGE ≥35bp · BNB ≥20bp",
+               "BTC sigue igual. HYPE excluido por ahora.",
+               "Las alertas SHADOW son forward-test; no órdenes automáticas."]
+        post_telegram(telegram_token(), telegram_chat_id(self.primary.config), "\\n".join(lines))
+
+    def run(self):
+        # Give the primary BTC monitor time to boot first.
+        time.sleep(3)
+        self.send_startup()
+        while not self.stop_event.is_set():
+            self.last_loop_at=time.time()
+            for asset,model in self.models.items():
+                if self.stop_event.is_set():
+                    break
+                try:
+                    now=datetime.now(timezone.utc)
+                    s=self.compute(asset,model,self.fetch_binance(model["symbol"]),self.fetch_kalshi(asset,model["series"],now))
+                except Exception as e:
+                    s={"updated_at":datetime.now(timezone.utc).isoformat(),"asset":asset,"status":"API ERROR","api_error":str(e)}
+                # Match the historical protocol: only the first qualifying pullback per 15m candle counts.
+                if s.get("status") in ("SHADOW CONFIRMED","SHADOW ENTRY ZONE","SHADOW PRICE HIGH","BASIS WARNING"):
+                    prev=self.first_signal.get(asset)
+                    if prev and prev.get("window")==s.get("window_start_utc") and prev.get("minute")!=s.get("last_completed_minute"):
+                        s["status"]="SHADOW ALREADY COUNTED"
+                        s["detail"]=f"First qualifying setup for this candle was already counted at M{prev.get('minute')}."
+                    elif not prev or prev.get("window")!=s.get("window_start_utc"):
+                        self.first_signal[asset]={"window":s.get("window_start_utc"),"minute":s.get("last_completed_minute"),"side":s.get("side")}
+                with self.lock:
+                    self.states[asset]=s
+                self.journal_if_confirmed(s)
+                self.maybe_alert(s)
+                time.sleep(float(os.getenv("ALT_ASSET_STAGGER_SECONDS","0.15")))
+            time.sleep(max(1.0,float(os.getenv("ALT_POLL_SECONDS","2.0"))))
+
+
+ALT_MONITOR=None
+
 RESEARCH_ASSETS = {
     "BTC":  {"symbol":"BTCUSDT",  "market":"spot",    "kalshi_series":"KXBTC15M"},
     "ETH":  {"symbol":"ETHUSDT",  "market":"spot",    "kalshi_series":"KXETH15M"},
@@ -814,7 +1059,10 @@ class Handler(BaseHTTPRequestHandler):
         path=urlparse(self.path).path
         if path=="/health":
             stale=time.time()-MONITOR.last_loop_at
-            self._send(200,json.dumps({"ok":True,"version":APP_VERSION,"monitor_loop_age_seconds":round(stale,1)}))
+            alt_stale=(time.time()-ALT_MONITOR.last_loop_at) if ALT_MONITOR else None
+            self._send(200,json.dumps({"ok":True,"version":APP_VERSION,"monitor_loop_age_seconds":round(stale,1),
+                                       "multiasset_loop_age_seconds":round(alt_stale,1) if alt_stale is not None else None,
+                                       "multiasset_mode":"shadow" if ALT_MONITOR else "off"}))
         elif path=="/":
             self._send(200,DASHBOARD_HTML,"text/html; charset=utf-8")
         elif path=="/api/state":
@@ -824,6 +1072,11 @@ class Handler(BaseHTTPRequestHandler):
             else:self._send(404,b"","text/plain")
         elif path=="/api/telegram/status":
             self._send(200,json.dumps({"token_present":bool(telegram_token()),"chat_id_present":bool(telegram_chat_id(MONITOR.config)),"configured":bool(telegram_token() and telegram_chat_id(MONITOR.config))}))
+        elif path=="/api/multiasset":
+            self._send(200,json.dumps({"mode":"shadow","version":APP_VERSION,"states":ALT_MONITOR.get_states() if ALT_MONITOR else {}}))
+        elif path=="/api/multiasset/journal":
+            if ALT_JOURNAL_PATH.exists():self._send(200,ALT_JOURNAL_PATH.read_bytes(),"text/csv; charset=utf-8",{"Content-Disposition":"attachment; filename=multiasset_shadow_journal.csv"})
+            else:self._send(404,b"","text/plain")
         elif path=="/api/research/status":
             self._send(200,json.dumps(RESEARCH.public_status()))
         elif path=="/api/research/file":
@@ -855,7 +1108,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global MONITOR,RESEARCH
+    global MONITOR,RESEARCH,ALT_MONITOR
     demo="--demo" in sys.argv or os.getenv("DEMO_MODE","").lower() in ("1","true","yes")
     port=int(os.getenv("PORT","8765"))
     host=os.getenv("HOST","0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
@@ -864,6 +1117,9 @@ def main():
         if a.startswith("--host="):host=a.split("=",1)[1]
     MONITOR=Monitor(demo=demo)
     threading.Thread(target=MONITOR.run,daemon=True).start()
+    if os.getenv("ALT_SHADOW_ENABLED","1").lower() in ("1","true","yes") and not demo:
+        ALT_MONITOR=AltShadowMonitor(MONITOR)
+        threading.Thread(target=ALT_MONITOR.run,daemon=True).start()
     RESEARCH=ResearchEngine(MONITOR)
     if os.getenv("ALT_RESEARCH_AUTO","1").lower() in ("1","true","yes") and not RESEARCH.done:
         RESEARCH.start(force=False)
@@ -875,6 +1131,8 @@ def main():
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:
-        MONITOR.stop_event.set();server.server_close()
+        MONITOR.stop_event.set()
+        if ALT_MONITOR:ALT_MONITOR.stop_event.set()
+        server.server_close()
 
 if __name__=="__main__":main()
