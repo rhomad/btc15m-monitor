@@ -67,15 +67,19 @@ class V27Regression(unittest.TestCase):
                 self.assertNotIn(forbidden, src)
 
     def test_observer_failures_are_isolated(self):
-        # The installed hooks call the original production methods first and guard
-        # observer work with try/except. Their source must retain that structure.
+        # vixion_v27 installs the first passive wrapper; launcher_v27 may install a
+        # second lifecycle wrapper around it. Both must call the wrapped production
+        # path first, isolate observer work with try/except, and return its result.
         alt_src = inspect.getsource(core.AltShadowMonitor.journal_if_confirmed)
         btc_src = inspect.getsource(core.Monitor.maybe_alert)
         resolve_src = inspect.getsource(core.ShadowLedger.maybe_resolve)
-        self.assertIn("_original_alt_journal", alt_src)
+        self.assertTrue("_original_alt_journal" in alt_src or "_overlay_journal" in alt_src)
         self.assertIn("try:", alt_src)
+        self.assertIn("return result", alt_src)
         self.assertIn("_original_btc_alert", btc_src)
+        self.assertIn("try:", btc_src)
         self.assertIn("_original_resolve", resolve_src)
+        self.assertIn("try:", resolve_src)
 
 
 if __name__ == "__main__":
