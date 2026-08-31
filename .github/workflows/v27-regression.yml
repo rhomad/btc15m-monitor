@@ -18,6 +18,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile
-        run: python -m py_compile app.py vixion_v27.py launcher_v27.py tests/test_v27_observability.py
+        run: python -m py_compile app.py vixion_v27.py launcher_v27.py tests/test_v27_observability.py tests/test_v27_launcher.py
       - name: Regression invariants
         run: python -m unittest discover -s tests -v
