@@ -4,6 +4,8 @@ WORKDIR /app
 COPY app.py /app/app.py
 COPY vixion_v27.py /app/vixion_v27.py
 COPY launcher_v27.py /app/launcher_v27.py
+COPY vixion_v28.py /app/vixion_v28.py
+COPY launcher_v28.py /app/launcher_v28.py
 RUN mkdir -p /data
 EXPOSE 8080
-CMD ["python", "launcher_v27.py", "--no-browser"]
+CMD ["python", "launcher_v28.py", "--no-browser"]
