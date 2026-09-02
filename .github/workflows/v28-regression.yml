@@ -1,0 +1,29 @@
+name: v2.8 regression
+
+on:
+  push:
+    branches: [v2.8-entry-timing-lab]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile
+        run: python -m py_compile app.py vixion_v27.py launcher_v27.py vixion_v28.py launcher_v28.py tests/test_v27_observability.py tests/test_v27_launcher.py tests/test_v28_entry_timing.py scripts/verify_v28_post_deploy.py tests/test_v28_verifier.py
+      - name: Production files unchanged vs main
+        run: |
+          git fetch --depth=1 origin main
+          for f in app.py vixion_v27.py launcher_v27.py; do
+            git diff --quiet origin/main -- "$f" || { echo "$f differs from main"; exit 1; }
+          done
+      - name: Regression invariants (v2.7 + v2.8)
+        run: python -W ignore -m unittest discover -s tests -v
