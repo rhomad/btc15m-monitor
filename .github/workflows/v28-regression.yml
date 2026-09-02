@@ -2,7 +2,7 @@ name: v2.8 regression
 
 on:
   push:
-    branches: [v2.8-entry-timing-lab]
+    branches: [v2.8-entry-timing-lab, main]
   pull_request:
     branches: [main]
 
