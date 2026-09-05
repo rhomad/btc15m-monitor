@@ -1,0 +1,72 @@
+name: v3.0 observer regression
+
+# Feature-branch / PR gate for VIXION 3.0 Increment 2.1 (Real V2.8 Source Observer).
+# Never deploys, never touches Railway, never uses secrets, never opens a network connection
+# from the code under test (network-blocked tests are part of the suite).
+
+on:
+  push:
+    branches: [v3.0-real-source-observer]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 1. Compile (production chain + v3.0 core + observer)
+        run: |
+          python -m py_compile app.py vixion_v27.py launcher_v27.py vixion_v28.py launcher_v28.py \
+            scripts/verify_v28_post_deploy.py vixion_v30_proposal.py scripts/v30_proposal_lab.py \
+            vixion_v30_observer.py scripts/v30_observe_v28.py \
+            tests/test_v27_observability.py tests/test_v27_launcher.py tests/test_v28_entry_timing.py \
+            tests/test_v28_verifier.py tests/test_v30_proposal_gateway.py tests/test_v30_real_observer.py
+
+      - name: 2. Fetch origin/main
+        run: git fetch --depth=1 origin main
+
+      - name: 3. Byte-identical to main (runtime, Increment 1 core, existing workflows)
+        run: |
+          for f in app.py vixion_v27.py launcher_v27.py vixion_v28.py launcher_v28.py Dockerfile \
+                   vixion_v30_proposal.py scripts/v30_proposal_lab.py scripts/verify_v28_post_deploy.py \
+                   tests/test_v30_proposal_gateway.py tests/fixtures/v30/sample_decisions_v28.jsonl \
+                   tests/fixtures/v30/sample_traces_v28.jsonl tests/fixtures/v30/README.md RUNBOOK_v30_INCREMENT1.md \
+                   .github/workflows/v27-regression.yml .github/workflows/v28-regression.yml \
+                   .github/workflows/v30-proposal-regression.yml; do
+            git diff --quiet origin/main -- "$f" || { echo "$f differs from main"; exit 1; }
+          done
+          ! grep -q "v30" Dockerfile
+          ! grep -q "v30_observ" launcher_v28.py launcher_v27.py app.py
+
+      - name: 4. Existing regression (v2.7 + v2.8 + v3.0 Increment 1)
+        run: python -W ignore -m unittest tests.test_v27_observability tests.test_v27_launcher tests.test_v28_entry_timing tests.test_v28_verifier tests.test_v30_proposal_gateway -v
+
+      - name: 5. Observer tests
+        run: python -W ignore -m unittest tests.test_v30_real_observer -v
+
+      - name: 6. Static no-network / no-live-order / read-only safety
+        run: |
+          python -W ignore -m unittest \
+            tests.test_v30_real_observer.TestSafety \
+            tests.test_v30_real_observer.TestReadOnlyAndPolicy \
+            tests.test_v30_real_observer.TestOutputAliasing \
+            tests.test_v30_real_observer.TestSourceDecisionValidation \
+            tests.test_v30_real_observer.TestTerminalUniqueness \
+            tests.test_v30_real_observer.TestRotationRace \
+            tests.test_v30_real_observer.TestLastScanAt \
+            tests.test_v30_real_observer.TestNoTickExpiredDecision \
+            tests.test_v30_real_observer.TestAuditorReproductions \
+            tests.test_v30_real_observer.TestByteIdentical -v
+          ! grep -nE '/portfolio/orders|place_order|submit_order|create_order|cancel_order|amend_order|requests\.(post|put|patch|delete)|method=["'"'"']?(POST|PUT|PATCH|DELETE)|urlopen|urllib\.request|http\.client|httpx|aiohttp|import socket|KALSHI|TELEGRAM|BINANCE|RAILWAY|DASHBOARD_PASSWORD' \
+              vixion_v30_observer.py scripts/v30_observe_v28.py
+
+      - name: 7. Full discovery (everything, once)
+        run: python -W ignore -m unittest discover -s tests -v
