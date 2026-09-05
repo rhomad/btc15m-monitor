@@ -1,0 +1,71 @@
+name: v3.0 proposal regression
+
+# Feature-branch / PR gate for VIXION 3.0 Increment 1 (Proposal-Only Execution Gateway).
+# This workflow NEVER deploys, never touches Railway and never uses secrets.
+
+on:
+  push:
+    branches: [v3.0-proposal-gateway]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 1. Compile (production chain + v3.0)
+        run: |
+          python -m py_compile app.py vixion_v27.py launcher_v27.py vixion_v28.py launcher_v28.py \
+            scripts/verify_v28_post_deploy.py vixion_v30_proposal.py scripts/v30_proposal_lab.py \
+            tests/test_v27_observability.py tests/test_v27_launcher.py tests/test_v28_entry_timing.py \
+            tests/test_v28_verifier.py tests/test_v30_proposal_gateway.py
+
+      - name: 2. Production runtime byte-identical to main; approved v2.7 CI delta pinned
+        run: |
+          git fetch --depth=1 origin main
+          for f in app.py vixion_v27.py launcher_v27.py vixion_v28.py launcher_v28.py Dockerfile \
+                   scripts/verify_v28_post_deploy.py .github/workflows/v28-regression.yml; do
+            git diff --quiet origin/main -- "$f" || { echo "$f differs from main"; exit 1; }
+          done
+          test "$(sha256sum .github/workflows/v27-regression.yml | cut -d' ' -f1)" = "7090be085149f3bc876e6c88591e54e8c3f99ec96b181b0ca8a8fd34941de28b" || {
+            echo ".github/workflows/v27-regression.yml differs from the approved Increment 1.3 CI-only delta"
+            exit 1
+          }
+          ! grep -q "v30" Dockerfile
+
+      - name: 3. Existing regression (v2.7 + v2.8)
+        run: python -W ignore -m unittest tests.test_v27_observability tests.test_v27_launcher tests.test_v28_entry_timing tests.test_v28_verifier -v
+
+      - name: 4. v3.0 proposal gateway tests
+        run: python -W ignore -m unittest tests.test_v30_proposal_gateway -v
+
+      - name: 5. Static no-live-order safety tests (explicit, blocking)
+        run: |
+          python -W ignore -m unittest \
+            tests.test_v30_proposal_gateway.TestSafety \
+            tests.test_v30_proposal_gateway.TestNoHindsight \
+            tests.test_v30_proposal_gateway.TestDecisionConsistency \
+            tests.test_v30_proposal_gateway.TestPolicyTTL \
+            tests.test_v30_proposal_gateway.TestContexts \
+            tests.test_v30_proposal_gateway.TestCausalStateMachine \
+            tests.test_v30_proposal_gateway.TestAuditorRegressions \
+            tests.test_v30_proposal_gateway.TestEventEnvelopeIntegrity \
+            tests.test_v30_proposal_gateway.TestUntrustedInputFuzz \
+            tests.test_v30_proposal_gateway.TestFrozenQuoteConsistency \
+            tests.test_v30_proposal_gateway.TestMalformedTraceOpen \
+            tests.test_v30_proposal_gateway.TestAuditorRegressions2 \
+            tests.test_v30_proposal_gateway.TestProductionUntouched -v
+          # Belt and braces: grep the v3.0 files for any order surface outside the tests.
+          ! grep -nE '/portfolio/orders|place_order|submit_order|create_order|cancel_order|amend_order|requests\.(post|put|patch|delete)|method=["'"'"']?(POST|PUT|PATCH|DELETE)|urlopen|urllib\.request|http\.client|import socket' \
+              vixion_v30_proposal.py scripts/v30_proposal_lab.py
+
+      - name: 6. Full discovery (everything, once)
+        run: python -W ignore -m unittest discover -s tests -v
