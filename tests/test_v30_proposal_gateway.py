@@ -573,7 +573,12 @@ class TestProductionUntouched(unittest.TestCase):
 
     def test_T27_v28_files_unchanged(self):
         self._assert_same_as_main("vixion_v28.py", "launcher_v28.py", "scripts/verify_v28_post_deploy.py",
-                                  ".github/workflows/v28-regression.yml", ".github/workflows/v27-regression.yml")
+                                  ".github/workflows/v28-regression.yml")
+
+    def test_T27b_v27_workflow_is_exact_approved_ci_only_delta(self):
+        expected = "7090be085149f3bc876e6c88591e54e8c3f99ec96b181b0ca8a8fd34941de28b"
+        actual = hashlib.sha256((ROOT / ".github/workflows/v27-regression.yml").read_bytes()).hexdigest()
+        self.assertEqual(actual, expected, "v27 workflow differs from the approved Increment 1.3 CI-only delta")
 
     def test_T28_dockerfile_unchanged(self):
         self._assert_same_as_main("Dockerfile")
